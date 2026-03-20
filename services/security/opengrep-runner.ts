@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
+import { safeSpawnSync } from '../code-intel-mcp/src/safe-spawn.ts';
+import { logger } from '../code-intel-mcp/src/logger.ts';
 
 interface CommandResult {
   status: number | null;
@@ -16,27 +16,40 @@ type CommandRunner = (
 ) => CommandResult;
 
 let commandRunner: CommandRunner = (command, args, options) =>
-  spawnSync(command, args, options) as unknown as CommandResult;
+  safeSpawnSync(command, args, {
+    cwd: options.cwd,
+    encoding: options.encoding,
+    allowedCommands: ['opengrep']
+  });
 
 export function setCommandRunnerForTests(runner: CommandRunner): void {
   commandRunner = runner;
 }
 
 export function resetCommandRunnerForTests(): void {
-  commandRunner = (command, args, options) => spawnSync(command, args, options) as unknown as CommandResult;
+  commandRunner = (command, args, options) =>
+    safeSpawnSync(command, args, {
+      cwd: options.cwd,
+      encoding: options.encoding,
+      allowedCommands: ['opengrep']
+    });
 }
 
-const OPEN_GREP_BINARY_CANDIDATES = [
-  process.env.OPENGREP_BIN,
-  'opengrep',
-  join(homedir(), '.local', 'bin', 'opengrep'),
-  join(homedir(), '.opengrep', 'cli', 'latest', 'opengrep'),
-  join(homedir(), '.cargo', 'bin', 'opengrep'),
-  '/usr/local/bin/opengrep'
-].filter((value): value is string => Boolean(value));
+function resolveOpenGrepBinaryCandidates(): string[] {
+  const homedir = process.env.HOME ?? process.env.USERPROFILE ?? '';
+  return [
+    process.env.OPENGREP_BIN,
+    'opengrep',
+    resolve(homedir, '.local', 'bin', 'opengrep'),
+    resolve(homedir, '.opengrep', 'cli', 'latest', 'opengrep'),
+    resolve(homedir, '.cargo', 'bin', 'opengrep'),
+    '/usr/local/bin/opengrep'
+  ].filter((value): value is string => Boolean(value));
+}
 
 function resolveOpenGrepBinary(workspaceRoot: string): string | null {
-  for (const candidate of OPEN_GREP_BINARY_CANDIDATES) {
+  const candidates = resolveOpenGrepBinaryCandidates();
+  for (const candidate of candidates) {
     const versionCheck = commandRunner(candidate, ['--version'], {
       cwd: workspaceRoot,
       encoding: 'utf8'
@@ -51,11 +64,12 @@ function resolveOpenGrepBinary(workspaceRoot: string): string | null {
 }
 
 export function runOpenGrepScan(workspaceRoot: string): { ok: boolean; message: string } {
+  const candidates = resolveOpenGrepBinaryCandidates();
   const openGrepBinary = resolveOpenGrepBinary(workspaceRoot);
   if (!openGrepBinary) {
     return {
       ok: false,
-      message: `OpenGrep is not available. Checked: ${OPEN_GREP_BINARY_CANDIDATES.join(', ')}`
+      message: `OpenGrep is not available. Checked: ${candidates.join(', ')}`
     };
   }
 
@@ -86,9 +100,9 @@ const isDirectExecution = (process.argv[1] ?? '').replaceAll('\\', '/').endsWith
 if (isDirectExecution) {
   const result = runOpenGrepScan(process.cwd());
   if (!result.ok) {
-    console.error(result.message);
+    logger.error('security scan failed', { message: result.message });
     process.exit(1);
   }
 
-  console.log(result.message);
+  logger.info('security scan passed', { message: result.message });
 }

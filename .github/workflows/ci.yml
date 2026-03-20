@@ -29,6 +29,9 @@ jobs:
       - name: Run quality checks
         run: pnpm ci:quality
 
+      - name: Run coverage
+        run: pnpm vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary
+
   indexer-smoke:
     runs-on: ubuntu-latest
     needs: quality
