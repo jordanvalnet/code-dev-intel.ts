@@ -1,0 +1,27 @@
+{
+  "mode": "balanced",
+  "minLines": 5,
+  "minTokens": 10,
+  "groups": [
+    {
+      "kind": "type2",
+      "fingerprint": "sha256:0024208e87e85462e4bc34c61bc6f7ff8252fc19d8eb5801a87ca23a34214992",
+      "occurrenceCount": 2
+    },
+    {
+      "kind": "type1",
+      "fingerprint": "sha256:5f1485f5c7a2587cb003a97075fc3673112f3de32c219bbdba20b2b777956282",
+      "occurrenceCount": 2
+    },
+    {
+      "kind": "type1",
+      "fingerprint": "sha256:7d971df2facced0612c96bd9d67ae7619c163c73c7a6a9e0d4f3e69aab581d72",
+      "occurrenceCount": 2
+    },
+    {
+      "kind": "type2",
+      "fingerprint": "sha256:89de8ee9006d80c772cc63a952c046279b9f5e9583a8d8ca3098302059d11f73",
+      "occurrenceCount": 2
+    }
+  ]
+}

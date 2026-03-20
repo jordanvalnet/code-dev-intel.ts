@@ -1,0 +1,42 @@
+name: perf-budget
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run performance benchmark (CI budget)
+        run: pnpm perf:benchmark:ci
+
+      - name: Run focused perf tests
+        run: pnpm test -- __tests__/unit/code-intel-mcp/perf.test.ts
+
+      - name: Upload benchmark config
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-budget-config
+          path: perf/budget.json
+          if-no-files-found: error

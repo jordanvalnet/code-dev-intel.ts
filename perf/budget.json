@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "notes": "Baseline budgets for low-cost local-first stack on 16GB class machines. CI runner budgets are intentionally looser.",
+  "targets": {
+    "local": {
+      "mcpSelfTestMsP95": 4000,
+      "indexerSmokeMsP95": 4000,
+      "indexerImpactedMsP95": 3000,
+      "peakRssMb": 600
+    },
+    "ci": {
+      "mcpSelfTestMsP95": 7000,
+      "indexerSmokeMsP95": 7000,
+      "indexerImpactedMsP95": 5000,
+      "peakRssMb": 900
+    }
+  }
+}

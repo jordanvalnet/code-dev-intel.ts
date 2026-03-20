@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+.vscode/
+.DS_Store
+Thumbs.db
+.sqlite
+*.sqlite*
+.zoekt/
+.code-intel-cache/

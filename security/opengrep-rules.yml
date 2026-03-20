@@ -1,0 +1,29 @@
+rules:
+  - id: no-eval-js
+    patterns:
+      - pattern: eval($X)
+    message: Avoid eval() in application code
+    languages: [javascript, typescript]
+    severity: ERROR
+
+  - id: no-child-process-exec
+    patterns:
+      - pattern-either:
+          - pattern: exec($CMD)
+          - pattern: execSync($CMD)
+          - pattern: spawn($CMD)
+    message: Process execution must be reviewed and sandboxed
+    languages: [javascript, typescript]
+    severity: WARNING
+
+  - id: no-hardcoded-password-like-values
+    patterns:
+      - pattern-either:
+          - pattern: $KEY = "..."
+          - pattern: $KEY = '...'
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i).*(password|passwd|secret|token|api[_-]?key).*
+    message: Possible hardcoded secret-like value
+    languages: [javascript, typescript]
+    severity: WARNING

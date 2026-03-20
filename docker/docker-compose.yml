@@ -1,0 +1,69 @@
+services:
+  code-intel-mcp:
+    profiles: ["core"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mcp
+    container_name: code-dev-intel-mcp
+    ports:
+      - "4545:4545"
+    environment:
+      NODE_ENV: development
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4545/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    mem_limit: 512m
+    cpus: 0.50
+
+  search-optional:
+    profiles: ["search-optional"]
+    image: alpine:3.22
+    container_name: code-dev-intel-search-optional
+    command:
+      [
+        "sh",
+        "-c",
+        "apk add --no-cache ripgrep >/dev/null && echo 'search-optional ready' && tail -f /dev/null"
+      ]
+    mem_limit: 256m
+    cpus: 0.25
+
+  zoekt-webserver:
+    profiles: ["zoekt-optional"]
+    image: sourcegraph/zoekt-webserver:latest
+    container_name: code-dev-intel-zoekt-webserver
+    command: ["-listen", ":6070", "-index", "/data/index"]
+    ports:
+      - "6070:6070"
+    volumes:
+      - zoekt-index:/data/index
+    mem_limit: 384m
+    cpus: 0.35
+
+  zoekt-index:
+    profiles: ["zoekt-optional"]
+    image: sourcegraph/zoekt-indexserver:latest
+    container_name: code-dev-intel-zoekt-index
+    working_dir: /workspace
+    command:
+      [
+        "sh",
+        "-c",
+        "zoekt-index -index /data/index /workspace/src /workspace/services /workspace/scripts"
+      ]
+    volumes:
+      - ..:/workspace:ro
+      - zoekt-index:/data/index
+    mem_limit: 384m
+    cpus: 0.35
+
+volumes:
+  zoekt-index:
