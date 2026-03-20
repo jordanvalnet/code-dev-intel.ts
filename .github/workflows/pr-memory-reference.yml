@@ -1,0 +1,23 @@
+name: pr-memory-reference
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check-memory-reference:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Validate PR memory reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node --experimental-strip-types ./services/governance/pr-memory-reference-check.ts

@@ -1,0 +1,53 @@
+{
+  "name": "code-dev-intel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": ">=24.13.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "preinstall": "node -e \"const ua=process.env.npm_config_user_agent||''; if(!ua.includes('pnpm')){console.error('Use pnpm instead of npm/yarn.'); process.exit(1)}\"",
+    "mcp:start": "node --experimental-strip-types ./services/code-intel-mcp/src/server.ts",
+    "mcp:start:logs": "node --experimental-strip-types ./services/code-intel-mcp/src/server.ts --log-requests",
+    "mcp:self-test": "node --experimental-strip-types ./services/code-intel-mcp/src/server.ts --self-test",
+    "indexer:impacted": "node --experimental-strip-types ./services/indexer/src/indexer-runner.ts --mode=impacted",
+    "indexer:smoke": "node ./scripts/indexer-smoke.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "security:scan": "node --experimental-strip-types ./services/security/opengrep-runner.ts",
+    "pr:check-memory-reference": "node --experimental-strip-types ./services/governance/pr-memory-reference-check.ts",
+    "ci:quality": "pnpm lint && pnpm type-check && pnpm test",
+    "ci:security": "pnpm security:scan",
+    "ci:indexer": "pnpm indexer:smoke",
+    "perf:benchmark": "node ./scripts/perf-benchmark.mjs --mode=local",
+    "perf:benchmark:ci": "node ./scripts/perf-benchmark.mjs --mode=ci --iterations=2",
+    "test:all": "pnpm lint && pnpm type-check && pnpm test",
+    "docker:core:up": "docker compose -f docker/docker-compose.yml --profile core up -d",
+    "docker:core:down": "docker compose -f docker/docker-compose.yml --profile core down",
+    "docker:all:up": "docker compose -f docker/docker-compose.yml --profile core --profile search-optional up -d",
+    "docker:all:down": "docker compose -f docker/docker-compose.yml --profile core --profile search-optional down",
+    "docker:zoekt:up": "docker compose -f docker/docker-compose.yml --profile core --profile zoekt-optional up -d code-intel-mcp zoekt-webserver",
+    "docker:zoekt:index": "docker compose -f docker/docker-compose.yml --profile zoekt-optional run --rm zoekt-index",
+    "docker:zoekt:down": "docker compose -f docker/docker-compose.yml --profile core --profile zoekt-optional down"
+  },
+  "devDependencies": {
+    "@ast-grep/cli": "^0.40.5",
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^24.3.0",
+    "@types/picomatch": "^4.0.2",
+    "eslint": "^9.36.0",
+    "globals": "^16.4.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.44.0",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "picomatch": "^4.0.3",
+    "zod": "^4.3.6"
+  }
+}
