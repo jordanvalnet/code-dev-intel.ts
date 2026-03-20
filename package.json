@@ -1,8 +1,43 @@
 {
   "name": "code-dev-intel",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
+  "description": "Self-hosted AI code intelligence for TypeScript — symbol resolution, structural search, duplicate detection, and dependency graphs via MCP server.",
+  "keywords": [
+    "code-intelligence",
+    "mcp",
+    "typescript",
+    "ai",
+    "symbol-resolution",
+    "duplicate-detection",
+    "ast-grep",
+    "ripgrep"
+  ],
+  "author": "jordanvalnet",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jordanvalnet/code-dev-intel.ts.git"
+  },
+  "homepage": "https://github.com/jordanvalnet/code-dev-intel.ts#readme",
+  "bugs": {
+    "url": "https://github.com/jordanvalnet/code-dev-intel.ts/issues"
+  },
+  "main": "./services/code-intel-mcp/src/server.ts",
+  "exports": {
+    ".": "./services/code-intel-mcp/src/server.ts",
+    "./contracts": "./services/code-intel-mcp/src/contracts.ts"
+  },
+  "files": [
+    "services/",
+    "schemas/",
+    "security/",
+    "scripts/",
+    "perf/",
+    "LICENSE",
+    "README.md"
+  ],
   "packageManager": "pnpm@10.28.2",
   "engines": {
     "node": ">=24.13.0",
@@ -40,14 +75,15 @@
     "@eslint/js": "^9.36.0",
     "@types/node": "^24.3.0",
     "@types/picomatch": "^4.0.2",
+    "@vitest/coverage-v8": "^3.2.4",
     "eslint": "^9.36.0",
     "globals": "^16.4.0",
-    "typescript": "^5.9.3",
     "typescript-eslint": "^8.44.0",
     "vitest": "^3.2.4"
   },
   "dependencies": {
     "picomatch": "^4.0.3",
+    "typescript": "^5.9.3",
     "zod": "^4.3.6"
   }
 }

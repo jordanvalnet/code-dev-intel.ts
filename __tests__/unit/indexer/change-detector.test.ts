@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { runIndexer } from '../../../services/indexer/src/indexer-runner.ts';
 import { isRelevantFile, listChangedFilesFromGitDiff } from '../../../services/indexer/src/change-detector.ts';
-import { describe, expect, it, vi } from 'vitest';
+import { setLoggerSinkForTests, resetLoggerSinkForTests } from '../../../services/code-intel-mcp/src/logger.ts';
+import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 
 function createTempGitRepo(): string {
@@ -43,15 +44,16 @@ describe('change-detector', () => {
 
   it('runner prints changedCount in git-diff mode', () => {
     const repoRoot = createTempGitRepo();
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const captured: string[] = [];
+    setLoggerSinkForTests((line) => {
+      captured.push(line);
+    });
 
     runIndexer({ mode: 'git-diff', workspaceRoot: repoRoot, baseRef: 'HEAD' });
 
-    const printedCall = logSpy.mock.calls[0];
-    const printed = typeof printedCall?.[0] === 'string' ? printedCall[0] : '';
-    expect(typeof printed).toBe('string');
+    const printed = captured.join('\n');
     expect(printed).toContain('"changedCount"');
 
-    logSpy.mockRestore();
+    resetLoggerSinkForTests();
   });
 });

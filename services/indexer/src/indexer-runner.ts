@@ -5,6 +5,7 @@ import {
   type DetectorMode
 } from './change-detector.ts';
 import { calculateWorkspaceImpactedFiles } from './impacted-files-engine.ts';
+import { logger } from '../../code-intel-mcp/src/logger.ts';
 
 export interface IndexerRunOptions extends ChangeDetectorOptions {
   mode: DetectorMode;
@@ -15,34 +16,22 @@ export interface IndexerRunOptions extends ChangeDetectorOptions {
 export function runIndexer(options: IndexerRunOptions): void {
   if (options.mode === 'git-diff') {
     const changedFiles = listChangedFilesFromGitDiff(options);
-    console.log(
-      JSON.stringify(
-        {
-          mode: 'git-diff',
-          changedFiles,
-          changedCount: changedFiles.length
-        },
-        null,
-        2
-      )
-    );
+    logger.info('indexer completed', {
+      mode: 'git-diff',
+      changedFiles,
+      changedCount: changedFiles.length
+    });
     return;
   }
 
   if (options.mode === 'watch') {
-    console.log('[indexer] watch mode started');
+    logger.info('indexer watch mode started');
     const stop = watchChangedFiles(options, (files) => {
-      console.log(
-        JSON.stringify(
-          {
-            mode: 'watch',
-            changedFiles: files,
-            changedCount: files.length
-          },
-          null,
-          2
-        )
-      );
+      logger.info('indexer watch detected changes', {
+        mode: 'watch',
+        changedFiles: files,
+        changedCount: files.length
+      });
     });
 
     process.on('SIGINT', () => {
@@ -70,19 +59,13 @@ export function runIndexer(options: IndexerRunOptions): void {
       changedSymbolsByFile: options.changedSymbolsByFile
     });
 
-    console.log(
-      JSON.stringify(
-        {
-          mode: 'impacted',
-          changedFiles,
-          changedCount: changedFiles.length,
-          impactedFiles,
-          impactedCount: impactedFiles.length
-        },
-        null,
-        2
-      )
-    );
+    logger.info('indexer completed', {
+      mode: 'impacted',
+      changedFiles,
+      changedCount: changedFiles.length,
+      impactedFiles,
+      impactedCount: impactedFiles.length
+    });
 
     return;
   }

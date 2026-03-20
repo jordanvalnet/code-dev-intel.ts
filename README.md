@@ -65,6 +65,13 @@ pnpm docker:core:down
 - Optional override if OpenGrep is installed outside PATH: set `OPENGREP_BIN` to the full binary path
 - Common install-script path: `~/.opengrep/cli/latest/opengrep`
 
+## Security design notes
+
+- **CORS**: No CORS headers are set. This is an explicit design choice — the server is intended for local-first / sidecar use (`127.0.0.1`). Browser-based frontends should proxy requests through their backend.
+- **API key**: Required when binding to non-local interfaces. Compared with `crypto.timingSafeEqual()`.
+- **Path traversal**: All user-supplied paths are canonicalized via `realpathSync` and validated against workspace boundaries.
+- **Command execution**: Uses `shell: false` with command allow-lists (`safeSpawnSync`).
+
 ## CI baseline
 
 - Consolidated CI workflow: `.github/workflows/ci.yml`

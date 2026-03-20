@@ -1,3 +1,5 @@
+import { logger } from '../code-intel-mcp/src/logger.ts';
+
 interface MemoryReferenceValidationResult {
   ok: boolean;
   errors: string[];
@@ -41,14 +43,11 @@ function runFromCli(): number {
   const result = validatePrBodyForMemoryReference(prBody);
 
   if (result.ok) {
-    console.log('PR memory reference check passed');
+    logger.info('PR memory reference check passed');
     return 0;
   }
 
-  console.error('PR memory reference check failed:');
-  for (const error of result.errors) {
-    console.error(`- ${error}`);
-  }
+  logger.error('PR memory reference check failed', { errors: result.errors });
 
   return 1;
 }
