@@ -1,5 +1,8 @@
 name: ci
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: ['**']
@@ -8,20 +11,23 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10.28.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -35,20 +41,23 @@ jobs:
   indexer-smoke:
     runs-on: ubuntu-latest
     needs: quality
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10.28.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -59,20 +68,23 @@ jobs:
   security:
     runs-on: ubuntu-latest
     needs: quality
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10.28.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -80,24 +92,31 @@ jobs:
       - name: Install OpenGrep
         run: |
           curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/main/install.sh | bash
+          # Ensure multiple potential install locations are added to PATH
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          if [ -x "$HOME/.local/bin/opengrep" ]; then
+          
+          # Manually set OPENGREP_BIN for the runner in subsequent steps
+          if [ -f "$HOME/.local/bin/opengrep" ]; then
             echo "OPENGREP_BIN=$HOME/.local/bin/opengrep" >> "$GITHUB_ENV"
-          elif [ -x "$HOME/.opengrep/cli/latest/opengrep" ]; then
+          elif [ -f "$HOME/.opengrep/cli/latest/opengrep" ]; then
             echo "OPENGREP_BIN=$HOME/.opengrep/cli/latest/opengrep" >> "$GITHUB_ENV"
-          elif [ -x "$HOME/.cargo/bin/opengrep" ]; then
+          elif [ -f "$HOME/.cargo/bin/opengrep" ]; then
             echo "OPENGREP_BIN=$HOME/.cargo/bin/opengrep" >> "$GITHUB_ENV"
           fi
-          command -v opengrep || true
+          
+          # Debug info to verify installation in logs
+          ls -R $HOME/.local/bin || true
+          ls -R $HOME/.opengrep || true
+          command -v opengrep || echo "opengrep not yet in path"
 
       - name: Run security scan
         run: pnpm ci:security
 
       - name: Upload SARIF artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: opengrep-sarif
           path: opengrep.sarif

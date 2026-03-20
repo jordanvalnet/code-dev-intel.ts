@@ -20,7 +20,20 @@ function runStep(args, label) {
     throw new Error(`indexer smoke produced no output at ${label}`);
   }
 
-  return JSON.parse(stdout);
+  // Handle multi-line JSON logs from the logger
+  const lines = stdout.split('\n').filter(line => line.trim());
+  const lastLine = lines[lines.length - 1];
+
+  try {
+    const payload = JSON.parse(lastLine);
+    // If it's a logger entry, the actual data is in the context
+    if (payload.context && typeof payload.context === 'object') {
+      return payload.context;
+    }
+    return payload;
+  } catch {
+    throw new Error(`indexer smoke failed to parse JSON at ${label}: ${lastLine}`);
+  }
 }
 
 function main() {

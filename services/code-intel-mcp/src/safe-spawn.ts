@@ -70,7 +70,10 @@ function assertAllowedCommand(command: string, allowedCommands: readonly string[
     return;
   }
 
-  if (!allowedCommands.includes(command)) {
+  const normalizedCommand = command.replaceAll('\\', '/');
+  const basename = normalizedCommand.split('/').pop() || normalizedCommand;
+
+  if (!allowedCommands.includes(command) && !allowedCommands.includes(basename)) {
     throw new Error(`command not allowed: ${command}`);
   }
 }
