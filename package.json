@@ -1,6 +1,6 @@
 {
-  "name": "code-dev-intel",
-  "version": "0.1.0",
+  "name": "code-dev-intel.ts",
+  "version": "0.1.3",
   "private": false,
   "type": "module",
   "description": "Self-hosted AI code intelligence for TypeScript — symbol resolution, structural search, duplicate detection, and dependency graphs via MCP server.",
@@ -24,27 +24,28 @@
   "bugs": {
     "url": "https://github.com/jordanvalnet/code-dev-intel.ts/issues"
   },
-  "main": "./services/code-intel-mcp/src/server.ts",
+  "main": "./dist/code-intel-mcp/src/server.js",
+  "bin": {
+    "code-dev-intel": "./dist/code-intel-mcp/src/server.js"
+  },
   "exports": {
-    ".": "./services/code-intel-mcp/src/server.ts",
-    "./contracts": "./services/code-intel-mcp/src/contracts.ts"
+    ".": "./dist/code-intel-mcp/src/server.js",
+    "./contracts": "./dist/code-intel-mcp/src/contracts.js"
   },
   "files": [
-    "services/",
+    "dist/",
     "schemas/",
-    "security/",
-    "scripts/",
-    "perf/",
     "LICENSE",
     "README.md"
   ],
   "packageManager": "pnpm@10.28.2",
   "engines": {
-    "node": ">=24.13.0",
+    "node": ">=18.0.0",
     "pnpm": ">=10.0.0"
   },
   "scripts": {
-    "preinstall": "node -e \"const ua=process.env.npm_config_user_agent||''; if(!ua.includes('pnpm')){console.error('Use pnpm instead of npm/yarn.'); process.exit(1)}\"",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
     "mcp:start": "node --experimental-strip-types ./services/code-intel-mcp/src/server.ts",
     "mcp:start:logs": "node --experimental-strip-types ./services/code-intel-mcp/src/server.ts --log-requests",
     "mcp:self-test": "node --experimental-strip-types ./services/code-intel-mcp/src/server.ts --self-test",
