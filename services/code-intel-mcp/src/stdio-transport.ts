@@ -5,7 +5,7 @@ import { logger } from './logger.ts';
 export function startStdioTransport(workspaceRoot?: string): void {
   const rl = createInterface({ input: process.stdin, terminal: false });
 
-  rl.on('line', async (line) => {
+  rl.on('line', (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
 
@@ -22,10 +22,11 @@ export function startStdioTransport(workspaceRoot?: string): void {
       return;
     }
 
-    const response = await processMcpPostRequest(parsed, workspaceRoot);
-    if (!response.skipResponse && response.payload) {
-      process.stdout.write(JSON.stringify(response.payload) + '\n');
-    }
+    void processMcpPostRequest(parsed, workspaceRoot).then((response) => {
+      if (!response.skipResponse && response.payload) {
+        process.stdout.write(JSON.stringify(response.payload) + '\n');
+      }
+    });
   });
 
   rl.on('close', () => {
