@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import {
@@ -8,7 +9,7 @@ import {
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { logger } from './logger.ts';
+import { logger, setLoggerSinkToStderr } from './logger.ts';
 import {
   HttpError,
   isExistingDirectory,
@@ -19,6 +20,7 @@ import {
 } from './server-utils.ts';
 import { processGetRequest } from './health-handler.ts';
 import { processMcpPostRequest, executeToolByName } from './mcp-handler.ts';
+import { startStdioTransport } from './stdio-transport.ts';
 
 const DEFAULT_PORT = 4545;
 const DEFAULT_MAX_BODY_BYTES = 512 * 1024;
@@ -473,10 +475,22 @@ async function runSelfTest(): Promise<void> {
   });
 }
 
-const isDirectExecution = (process.argv[1] ?? '').replaceAll('\\', '/').endsWith('server.ts');
+const argPath = (process.argv[1] ?? '').replaceAll('\\', '/');
+const isDirectExecution =
+  argPath.endsWith('server.ts') ||
+  argPath.endsWith('server.js') ||
+  argPath.endsWith('code-dev-intel') ||
+  argPath.endsWith('code-dev-intel.ts');
 if (isDirectExecution) {
+  const shouldUseStdio = process.argv.includes('--stdio');
   const shouldSelfTest = process.argv.includes('--self-test');
-  if (shouldSelfTest) {
+
+  if (shouldUseStdio) {
+    setLoggerSinkToStderr();
+    const workspaceRoot =
+      normalizeWorkspaceRoot(process.env.CODE_INTEL_WORKSPACE_ROOT) ?? getWorkspaceRootFromArgs();
+    startStdioTransport(workspaceRoot);
+  } else if (shouldSelfTest) {
     try {
       await runSelfTest();
     } catch (error: unknown) {

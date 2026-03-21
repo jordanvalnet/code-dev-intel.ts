@@ -116,6 +116,12 @@ export const logger = {
   debug: (message: string, context?: LoggerContext) => writeLog('debug', message, context)
 };
 
+export function setLoggerSinkToStderr(): void {
+  logSink = (line) => {
+    process.stderr.write(`${line}\n`);
+  };
+}
+
 export function setLoggerSinkForTests(sink: LoggerSink): void {
   logSink = sink;
 }
