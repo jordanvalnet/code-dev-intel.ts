@@ -36,6 +36,87 @@ pnpm mcp:start
 
 Server default URL: `http://127.0.0.1:4545`
 
+Installed as a package, the native CLI entrypoint is:
+
+```bash
+pnpm exec code-dev-intel start --workspaceRoot=. --port=4545
+```
+
+## CLI commands
+
+### `start`
+
+Starts the HTTP server in the foreground.
+
+- Use it for manual local runs.
+- The process stays attached to the current terminal.
+- Exit code `0` means the server started and kept running until it was stopped normally.
+- Exit code non-zero means startup failed.
+
+Example:
+
+```bash
+pnpm exec code-dev-intel start --workspaceRoot=. --port=4545
+```
+
+### `status`
+
+Checks whether a server is already healthy on the requested host/port.
+
+- Exit code `0`: healthy server detected.
+- Exit code non-zero: no healthy server detected.
+
+Example:
+
+```bash
+pnpm exec code-dev-intel status --port=4545
+```
+
+### `ensure`
+
+Ensures a healthy server is available on the requested host/port.
+
+- If the server is already healthy, the command returns immediately with exit code `0`.
+- If the server is not healthy, the CLI starts it in the background, waits for the health endpoint, then returns `0` once ready.
+- If the service does not become healthy before timeout, the command exits non-zero with a clear error message.
+
+`ensure` is the recommended command for AI agents, CI jobs, hooks, and automation because it is idempotent and removes the need for repo-local wrapper scripts.
+
+Cross-platform consumer example:
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545
+```
+
+Verbose example with explicit timeout:
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545 --timeout=15000 --verbose
+```
+
+### Migrating from local wrapper scripts
+
+If a consumer repository previously used a repo-local script to:
+
+1. check whether code-intel was already running,
+2. start it when missing,
+3. wait for `/health`,
+4. fail on timeout,
+
+replace that wrapper with the native CLI command below:
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545
+```
+
+That is now the supported and recommended entrypoint for automation.
+
+### Recommended usage by context
+
+- Manual local debugging: `start`
+- Health probe only: `status`
+- AI agents, CI, hooks, automation: `ensure`
+
 ## Startup options
 
 You can configure startup via CLI args or environment variables.
@@ -57,6 +138,38 @@ Example:
 ```bash
 pnpm mcp:start -- --port=4600
 ```
+
+### Ensure timeout
+
+- CLI: `--timeout=<MILLISECONDS>`
+
+Used by `ensure` while waiting for the health endpoint to become ready.
+
+Example:
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545 --timeout=15000
+```
+
+### Host and health URL
+
+- CLI: `--host=<HOST>`
+- CLI: `--health-url=<URL_OR_PATH>`
+
+`--health-url` accepts either a full URL or a path such as `/health`.
+
+Examples:
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --host=127.0.0.1 --port=4545
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545 --health-url=/health
+```
+
+### Verbose helper output
+
+- CLI: `--verbose`
+
+Useful with `ensure` to print retry progress while waiting for health.
 
 ### Request logging (debug mode)
 
@@ -83,6 +196,12 @@ When enabled, each request logs method, path, status, duration, request body, an
 
 If `CODE_INTEL_HOST` is non-local (`0.0.0.0`, LAN host, etc.) and no API key is configured,
 tool requests are rejected with HTTP 401 for safety.
+
+## Exit codes
+
+- `start`: `0` on normal process shutdown, non-zero on startup failure.
+- `status`: `0` when the server is healthy, `1` otherwise.
+- `ensure`: `0` when the server is already healthy or becomes healthy after startup, `1` when startup or health validation fails.
 
 ## `findDuplicates` request example
 

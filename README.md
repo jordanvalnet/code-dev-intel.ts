@@ -6,6 +6,14 @@ Self-hosted AI code intelligence stack for TypeScript projects.
 
 Provide AI agents with IDE-grade code understanding (symbols, references, impact analysis, structured queries) without scanning the whole codebase every time.
 
+For consumer repositories, the recommended bootstrap command is:
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545
+```
+
+Use `ensure` for AI agents, CI jobs, hooks, and automations so the server is started only when needed and validated through its health endpoint without repo-local wrapper scripts.
+
 Constraints:
 - 100% self-hosted
 - Local-first for each developer
@@ -57,6 +65,13 @@ pnpm docker:core:down
 - [services/code-intel-mcp/README.md](services/code-intel-mcp/README.md) - MCP server setup, startup flags, endpoints, and TypeScript integration guidance.
 - [services/indexer/README.md](services/indexer/README.md) - Incremental indexer modes (`git-diff`, `watch`, `impacted`) and validation commands.
 - [docker/README.md](docker/README.md) - Docker profiles (`core`, `search-optional`, `zoekt-optional`) and resource considerations.
+
+## Consumer automation
+
+- Recommended command: `pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545`
+- `start` is for manual foreground runs.
+- `status` only checks health.
+- `ensure` is the stable entrypoint for idempotent automation.
 
 ## Security baseline
 

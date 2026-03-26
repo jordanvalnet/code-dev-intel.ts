@@ -9,6 +9,7 @@ import {
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import { spawn as spawnChildProcess } from 'node:child_process';
 import { logger, setLoggerSinkToStderr } from './logger.ts';
 import {
   HttpError,
@@ -21,9 +22,8 @@ import {
 import { processGetRequest } from './health-handler.ts';
 import { processMcpPostRequest, executeToolByName } from './mcp-handler.ts';
 import { startStdioTransport } from './stdio-transport.ts';
-
-const DEFAULT_PORT = 4545;
-const DEFAULT_MAX_BODY_BYTES = 512 * 1024;
+import { runCli } from './cli.ts';
+import { DEFAULT_MAX_BODY_BYTES, DEFAULT_PORT } from './server-config.ts';
 
 interface StartupOptions {
   workspaceRoot?: string;
@@ -46,35 +46,6 @@ function getWorkspaceRootFromArgs(): string | undefined {
   return raw && raw.length > 0 ? raw : undefined;
 }
 
-function parsePortFromArgs(): number | undefined {
-  const arg = process.argv.find((value) => value.startsWith('--port='));
-  const raw = arg?.split('=')[1]?.trim();
-  if (!raw) {
-    return undefined;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return undefined;
-  }
-
-  return parsed;
-}
-
-function parsePortFromEnv(): number | undefined {
-  const raw = process.env.CODE_INTEL_PORT?.trim();
-  if (!raw) {
-    return undefined;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return undefined;
-  }
-
-  return parsed;
-}
-
 function parseHostFromArgs(): string | undefined {
   const arg = process.argv.find((value) => value.startsWith('--host='));
   const raw = arg?.split('=')[1]?.trim();
@@ -89,15 +60,6 @@ function parseHostFromEnv(): string | undefined {
 function parseApiKeyFromEnv(): string | undefined {
   const raw = process.env.CODE_INTEL_API_KEY?.trim();
   return raw && raw.length > 0 ? raw : undefined;
-}
-
-function parseLogRequestsFromArgs(): boolean {
-  return process.argv.includes('--log-requests') || process.argv.includes('--logRequests');
-}
-
-function parseLogRequestsFromEnv(): boolean {
-  const raw = process.env.CODE_INTEL_LOG_REQUESTS?.trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 }
 
 function parseMaxBodyBytesFromEnv(): number {
@@ -143,25 +105,6 @@ async function promptWorkspaceRootIfMissingOrInvalid(initialWorkspaceRoot?: stri
   } finally {
     rl.close();
   }
-}
-
-function resolveStartupOptions(): StartupOptions {
-  const workspaceRoot =
-    normalizeWorkspaceRoot(process.env.CODE_INTEL_WORKSPACE_ROOT) ?? getWorkspaceRootFromArgs();
-  const host = parseHostFromArgs() ?? parseHostFromEnv() ?? '127.0.0.1';
-  const port = parsePortFromArgs() ?? parsePortFromEnv() ?? DEFAULT_PORT;
-  const logRequests = parseLogRequestsFromArgs() || parseLogRequestsFromEnv();
-  const apiKey = parseApiKeyFromEnv();
-  const maxBodyBytes = parseMaxBodyBytesFromEnv();
-
-  return {
-    workspaceRoot,
-    host,
-    port,
-    logRequests,
-    apiKey,
-    maxBodyBytes
-  };
 }
 
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
@@ -475,6 +418,42 @@ async function runSelfTest(): Promise<void> {
   });
 }
 
+async function startForegroundServer(
+  startupOptions: StartupOptions,
+  executionMode: { allowPrompt: boolean }
+): Promise<void> {
+  const startupWorkspaceRoot = executionMode.allowPrompt
+    ? await promptWorkspaceRootIfMissingOrInvalid(startupOptions.workspaceRoot)
+    : startupOptions.workspaceRoot;
+
+  if (startupOptions.host !== '127.0.0.1' && startupOptions.host !== 'localhost' && !startupOptions.apiKey) {
+    logger.warn('non-local host configured without API key; tool requests will be rejected');
+  }
+
+  const server = startMcpSkeletonServerWithOptions(
+    startupOptions.port,
+    startupWorkspaceRoot,
+    startupOptions.logRequests,
+    {
+      host: startupOptions.host,
+      apiKey: startupOptions.apiKey,
+      maxBodyBytes: startupOptions.maxBodyBytes
+    }
+  );
+  logger.info('server listening', { url: `http://${startupOptions.host}:${startupOptions.port}` });
+  if (startupWorkspaceRoot) {
+    logger.info('default workspace root configured', { workspaceRoot: startupWorkspaceRoot });
+  }
+  logger.info('request logs configuration', {
+    enabled: startupOptions.logRequests
+  });
+  const shutdown = () => {
+    server.close(() => process.exit(0));
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
 const argPath = (process.argv[1] ?? '').replaceAll('\\', '/');
 const isDirectExecution =
   argPath.endsWith('server.ts') ||
@@ -500,34 +479,40 @@ if (isDirectExecution) {
       process.exit(1);
     }
   } else {
-    const startupOptions = resolveStartupOptions();
-    const startupWorkspaceRoot = await promptWorkspaceRootIfMissingOrInvalid(startupOptions.workspaceRoot);
+    try {
+      const exitCode = await runCli(process.argv.slice(2), {
+        env: process.env,
+        fetchImpl: fetch,
+        spawnImpl: spawnChildProcess,
+        stdout: process.stdout,
+        stderr: process.stderr,
+        execPath: process.execPath,
+        execArgv: process.execArgv,
+        scriptPath: process.argv[1],
+        platform: process.platform,
+        cwd: process.cwd(),
+        startForegroundServer: (options, executionMode) =>
+          startForegroundServer(
+            {
+              workspaceRoot: options.workspaceRoot,
+              host: options.host,
+              port: options.port,
+              logRequests: options.logRequests,
+              apiKey: options.apiKey,
+              maxBodyBytes: options.maxBodyBytes
+            },
+            executionMode
+          )
+      });
 
-    if (startupOptions.host !== '127.0.0.1' && startupOptions.host !== 'localhost' && !startupOptions.apiKey) {
-      logger.warn('non-local host configured without API key; tool requests will be rejected');
-    }
-
-    const server = startMcpSkeletonServerWithOptions(
-      startupOptions.port,
-      startupWorkspaceRoot,
-      startupOptions.logRequests,
-      {
-        host: startupOptions.host,
-        apiKey: startupOptions.apiKey,
-        maxBodyBytes: startupOptions.maxBodyBytes
+      if (exitCode !== 0) {
+        process.exit(exitCode);
       }
-    );
-    logger.info('server listening', { url: `http://${startupOptions.host}:${startupOptions.port}` });
-    if (startupWorkspaceRoot) {
-      logger.info('default workspace root configured', { workspaceRoot: startupWorkspaceRoot });
+    } catch (error: unknown) {
+      logger.error('cli command failed', {
+        error: toErrorMessage(error)
+      });
+      process.exit(1);
     }
-    logger.info('request logs configuration', {
-      enabled: startupOptions.logRequests
-    });
-    const shutdown = () => {
-      server.close(() => process.exit(0));
-    };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
   }
 }
