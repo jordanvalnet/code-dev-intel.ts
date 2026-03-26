@@ -73,6 +73,11 @@ pnpm docker:core:down
 - `status` only checks health.
 - `ensure` is the stable entrypoint for idempotent automation.
 
+## Release smoke test
+
+- Run `pnpm release:smoke` to validate the published npm package from a temporary consumer project.
+- The smoke test allocates a free localhost port automatically, runs `ensure`, checks `status`, then cleans up the background process and temp files.
+
 ## Security baseline
 
 - Run local security scan: `pnpm security:scan`
