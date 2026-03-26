@@ -26,7 +26,7 @@
   },
   "main": "./dist/code-intel-mcp/src/server.js",
   "bin": {
-    "code-dev-intel": "./dist/code-intel-mcp/src/server.js"
+    "code-dev-intel": "dist/code-intel-mcp/src/server.js"
   },
   "exports": {
     ".": "./dist/code-intel-mcp/src/server.js",
