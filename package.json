@@ -51,6 +51,7 @@
     "mcp:self-test": "node --experimental-strip-types ./services/code-intel-mcp/src/server.ts --self-test",
     "indexer:impacted": "node --experimental-strip-types ./services/indexer/src/indexer-runner.ts --mode=impacted",
     "indexer:smoke": "node ./scripts/indexer-smoke.mjs",
+    "release:smoke": "node ./scripts/release-smoke.mjs",
     "lint": "eslint . --max-warnings 0",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
