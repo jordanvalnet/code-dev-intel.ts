@@ -1,105 +1,403 @@
 # code-dev-intel
 
-Self-hosted AI code intelligence stack for TypeScript projects.
+`code-dev-intel` is an npm package that exposes a self-hosted MCP and HTTP server for TypeScript code intelligence.
 
-## Goal
+It gives AI agents and IDE assistants fast access to symbol definitions, references, implementations, file outlines, dependency graphs, structural search, text search, and duplicate detection without forcing the model to scan your whole repository every time.
 
-Provide AI agents with IDE-grade code understanding (symbols, references, impact analysis, structured queries) without scanning the whole codebase every time.
+## What The Package Brings To A Project
 
-For consumer repositories, the recommended bootstrap command is:
+- Faster code navigation for AI agents in medium and large TypeScript repositories.
+- A local-first MCP server you can plug into IDEs, coding agents, and CLI assistants.
+- A stable automation entrypoint with `ensure`, so scripts and agents can start the server only when needed.
+- An HTTP API for tools and health checks, plus MCP JSON-RPC for clients that speak MCP directly.
+- A self-hosted alternative to remote code indexing for teams that want data to stay local.
+
+## Good Use Cases
+
+- Refactoring a symbol safely across many files.
+- Reviewing a PR and tracing impact before commenting.
+- Understanding a codebase entrypoint without opening dozens of files.
+- Replacing repeated grep chains with semantic navigation.
+- Running local automation in CI, hooks, or agent workflows.
+
+## What The Package Exposes
+
+### Tools
+
+- `findDefinitions`
+- `findReferences`
+- `findImplementations`
+- `getFileOutline`
+- `getSymbolContent`
+- `dependencyGraph`
+- `searchStruct`
+- `searchText`
+- `findDuplicates`
+
+### Protocols
+
+- MCP over stdio
+- MCP over JSON-RPC via `POST /mcp`
+- Plain HTTP tool endpoints under `/tools/*`
+- Health and discovery endpoints via `/health` and `/tools/describe`
+
+## Installation
+
+```bash
+pnpm add -D code-dev-intel.ts
+```
+
+Requirements:
+
+- Node.js `>=18`
+- pnpm `>=10`
+- A TypeScript or JavaScript repository where semantic navigation is useful
+
+## Quick Start
+
+### Recommended bootstrap command
 
 ```bash
 pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545
 ```
 
-Use `ensure` for AI agents, CI jobs, hooks, and automations so the server is started only when needed and validated through its health endpoint without repo-local wrapper scripts.
+This is the recommended command for agents, scripts, hooks, and CI because it:
 
-Constraints:
-- 100% self-hosted
-- Local-first for each developer
-- Keep resource usage reasonable on 16GB machines
-- Docker-first where possible
+- starts the service only if needed
+- waits until the server is healthy
+- exits successfully when the server is already running
 
-## Docs index
+### Other CLI commands
 
-- `docs/ai/00-context.md`
-- `docs/ai/01-target-architecture.md`
-- `docs/ai/02-agent-orchestration.md`
-- `docs/ai/03-shared-memory-protocol.md`
-- `docs/ai/04-executable-task-backlog.md`
-- `docs/ai/05-agent-prompts.md`
-- `docs/ai/06-bootstrap-execution-kit.md`
-- `docs/ai/memory/AGENT_MEMORY.md`
+```bash
+pnpm exec code-dev-intel start --workspaceRoot=. --port=4545
+pnpm exec code-dev-intel status --port=4545
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545 --timeout=15000 --verbose
+```
 
-## First run
+## How To Use It In A Project
 
-1. Read context and architecture docs.
-2. Follow task backlog in order.
-3. Every agent must update `docs/ai/memory/AGENT_MEMORY.md` after each task.
+### HTTP example
 
-## Docker quick start
+```bash
+curl -X POST http://127.0.0.1:4545/tools/findReferences \
+	-H "Content-Type: application/json" \
+	-d '{
+		"workspaceRoot": "/absolute/path/to/project",
+		"filePath": "src/feature/use-case.ts",
+		"symbol": "runFeature"
+	}'
+```
 
-- Core only (recommended): `pnpm docker:core:up`
-- Core + optional search helpers: `pnpm docker:all:up`
-- Core + Zoekt webserver (optional): `pnpm docker:zoekt:up`
-- Build Zoekt index (on-demand): `pnpm docker:zoekt:index`
-- Stop containers: `pnpm docker:all:down`
+### MCP JSON-RPC example
 
-See `docker/README.md` for details.
+```json
+{
+	"jsonrpc": "2.0",
+	"id": 1,
+	"method": "tools/call",
+	"params": {
+		"name": "getFileOutline",
+		"arguments": {
+			"workspaceRoot": "/absolute/path/to/project",
+			"filePath": "src/feature/use-case.ts",
+			"options": {
+				"symbolKinds": ["function", "class"]
+			}
+		}
+	}
+}
+```
 
-### MCP server in Docker (recommended for local isolation)
+### Typical agent workflow
+
+1. Call `getFileOutline` to understand file structure.
+2. Call `getSymbolContent` for the exact function, class, or type you need.
+3. Call `findReferences` or `findDefinitions` to trace impact.
+4. Use `dependencyGraph` when imports and module flow matter.
+5. Use `searchStruct` for AST-shaped code patterns.
+6. Fall back to `searchText` for literal strings, comments, or error messages.
+
+## Tool Guide
+
+### `findDefinitions`
+
+Use when you know the symbol name and want the canonical declaration site.
+
+### `findReferences`
+
+Use when you want call sites, usages, and cross-file impact.
+
+### `findImplementations`
+
+Use for interfaces, abstract contracts, and implementation discovery.
+
+### `getFileOutline`
+
+Use before reading a large file. This is the fastest way to understand the file structure.
+
+### `getSymbolContent`
+
+Use when you want the full declaration body of one symbol instead of the entire file.
+
+### `dependencyGraph`
+
+Use when you need import relationships and transitive module dependencies.
+
+### `searchStruct`
+
+Use when you need structural matching with `ast-grep` patterns instead of plain text.
+
+Example:
+
+```json
+{
+	"workspaceRoot": "/absolute/path/to/project",
+	"query": "export interface $NAME { $$$BODY }",
+	"options": {
+		"language": "ts"
+	}
+}
+```
+
+### `searchText`
+
+Use for literal strings, comments, log messages, config keys, or partial identifiers.
+
+### `findDuplicates`
+
+Use when you want code duplication clusters and optional markdown reporting.
+
+## Prompting Recommendations For AI Agents
+
+This package works best when the client prompt explicitly tells the model when to prefer semantic tools over raw text search.
+
+### Minimal system prompt snippet
+
+```text
+Use code-dev-intel for non-trivial TypeScript exploration before falling back to grep or full-file reads.
+Prefer:
+- getFileOutline for large files
+- getSymbolContent for targeted reads
+- findDefinitions/findReferences for symbol tracing
+- dependencyGraph for module flow
+- searchStruct for AST-shaped patterns
+- searchText only for literal text queries
+```
+
+### Review-focused prompt snippet
+
+```text
+Before reviewing TypeScript changes, use code-dev-intel to trace definitions, references, implementations, and dependency impact.
+Do not rely only on text search when checking refactors or behavioral regressions.
+```
+
+### Refactor-focused prompt snippet
+
+```text
+When planning a refactor, first inspect file outlines and symbol content, then trace references and dependency impact.
+Use structural search only for syntax-shaped patterns and plain text search only for literals.
+```
+
+### Practical guidance for prompt authors
+
+- Tell the model that this server is for TypeScript semantic navigation.
+- State when it should be preferred over grep.
+- Mention the high-value tools by name so the model knows what to search for.
+- Keep the instructions short and concrete. Long MCP instructions are easier for clients to truncate.
+
+## IDE And Agent Configuration
+
+The package can be exposed either as:
+
+- a local stdio MCP server
+- a local HTTP server with `/mcp` and `/tools/*`
+
+### VS Code / GitHub Copilot
+
+Create `.vscode/mcp.json`:
+
+```json
+{
+	"servers": {
+		"codeIntel": {
+			"type": "stdio",
+			"command": "pnpm",
+			"args": [
+				"exec",
+				"code-dev-intel",
+				"--stdio",
+				"--workspaceRoot=${workspaceFolder}"
+			]
+		}
+	}
+}
+```
+
+Useful VS Code commands:
+
+- `MCP: List Servers`
+- `MCP: Reset Cached Tools`
+- `MCP: Reset Trust`
+- `MCP: Open Workspace Folder MCP Configuration`
+
+Notes:
+
+- VS Code expects `.vscode/mcp.json` with top-level `servers`.
+- If tools do not appear after an update, reset cached tools and reload the window.
+
+### Claude Code
+
+Project-shared config in `.mcp.json`:
+
+```json
+{
+	"mcpServers": {
+		"code-intel": {
+			"command": "pnpm",
+			"args": [
+				"exec",
+				"code-dev-intel",
+				"--stdio",
+				"--workspaceRoot=."
+			]
+		}
+	}
+}
+```
+
+CLI setup example:
+
+```bash
+claude mcp add --transport stdio --scope project code-intel -- \
+	pnpm exec code-dev-intel --stdio --workspaceRoot=.
+```
+
+On native Windows, Claude Code may require `cmd /c` for `npx`. With `pnpm`, the direct command usually remains cleaner.
+
+Useful commands:
+
+- `claude mcp list`
+- `claude mcp get code-intel`
+- `/mcp`
+
+### Windsurf
+
+Add the server in `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+	"mcpServers": {
+		"code-intel": {
+			"command": "pnpm",
+			"args": [
+				"exec",
+				"code-dev-intel",
+				"--stdio",
+				"--workspaceRoot=."
+			]
+		}
+	}
+}
+```
+
+Windsurf also supports remote HTTP MCP configuration if you prefer starting the server separately and pointing the client to `/mcp`.
+
+### Generic MCP clients
+
+Many clients and IDE agents can consume the same server even if their exact UI differs.
+
+Use this stdio shape when the client expects a command-based MCP server:
+
+```json
+{
+	"mcpServers": {
+		"code-intel": {
+			"command": "pnpm",
+			"args": [
+				"exec",
+				"code-dev-intel",
+				"--stdio",
+				"--workspaceRoot=."
+			]
+		}
+	}
+}
+```
+
+Use this HTTP shape when the client expects a remote MCP endpoint:
+
+```json
+{
+	"mcpServers": {
+		"code-intel": {
+			"type": "http",
+			"url": "http://127.0.0.1:4545/mcp"
+		}
+	}
+}
+```
+
+This generic approach usually applies to MCP-capable assistants and IDEs such as Cursor-like, Cline-like, Roo-like, or custom internal agent shells that can launch stdio or HTTP MCP servers.
+
+### Non-MCP automation
+
+If your tool does not support MCP yet, start the server with `ensure` and call the HTTP endpoints directly.
+
+Examples:
+
+- internal scripts
+- CI jobs
+- review bots
+- custom agent frameworks
+- editor plugins that can call HTTP but not MCP
+
+## Recommended Operating Modes
+
+### For local development
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545
+```
+
+### For CI or hooks
+
+```bash
+pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545 --timeout=15000
+```
+
+### For containerized local isolation
 
 ```bash
 pnpm docker:core:up
 curl http://127.0.0.1:4545/health
 ```
 
-Stop:
+## Security Notes
+
+- The default host is `127.0.0.1`.
+- If you bind to a non-local host, configure `CODE_INTEL_API_KEY`.
+- All user-supplied paths are normalized and validated against workspace boundaries.
+- The server is designed for local-first use. If you expose it remotely, put it behind your normal network controls.
+
+## Package Validation
+
+Before publishing a new version, these commands are the main confidence checks:
 
 ```bash
-pnpm docker:core:down
+pnpm build
+pnpm test:all
+pnpm mcp:self-test
+pnpm release:smoke
 ```
 
-## Sub-README index
+`release:smoke` is the most useful final check for the npm package because it validates the published package shape from a temporary consumer project.
 
-- [services/code-intel-mcp/README.md](services/code-intel-mcp/README.md) - MCP server setup, startup flags, endpoints, and TypeScript integration guidance.
-- [services/indexer/README.md](services/indexer/README.md) - Incremental indexer modes (`git-diff`, `watch`, `impacted`) and validation commands.
-- [docker/README.md](docker/README.md) - Docker profiles (`core`, `search-optional`, `zoekt-optional`) and resource considerations.
+## Contributor Docs
 
-## Consumer automation
+If you are working on the package itself rather than consuming it, start here:
 
-- Recommended command: `pnpm exec code-dev-intel ensure --workspaceRoot=. --port=4545`
-- `start` is for manual foreground runs.
-- `status` only checks health.
-- `ensure` is the stable entrypoint for idempotent automation.
-
-## Release smoke test
-
-- Run `pnpm release:smoke` to validate the published npm package from a temporary consumer project.
-- The smoke test allocates a free localhost port automatically, runs `ensure`, checks `status`, then cleans up the background process and temp files.
-
-## Security baseline
-
-- Run local security scan: `pnpm security:scan`
-- Baseline rules: `security/opengrep-rules.yml`
-- Optional override if OpenGrep is installed outside PATH: set `OPENGREP_BIN` to the full binary path
-- Common install-script path: `~/.opengrep/cli/latest/opengrep`
-
-## Security design notes
-
-- **CORS**: No CORS headers are set. This is an explicit design choice — the server is intended for local-first / sidecar use (`127.0.0.1`). Browser-based frontends should proxy requests through their backend.
-- **API key**: Required when binding to non-local interfaces. Compared with `crypto.timingSafeEqual()`.
-- **Path traversal**: All user-supplied paths are canonicalized via `realpathSync` and validated against workspace boundaries.
-- **Command execution**: Uses `shell: false` with command allow-lists (`safeSpawnSync`).
-
-## CI baseline
-
-- Consolidated CI workflow: `.github/workflows/ci.yml`
-- Local indexer smoke command: `pnpm indexer:smoke`
-
-## Performance budget (low-cost)
-
-- Budget config: `perf/budget.json`
-- Local benchmark: `pnpm perf:benchmark`
-- CI benchmark workflow: `.github/workflows/perf-budget.yml`
-- Trigger policy: manual (`workflow_dispatch`) + weekly schedule only (no push/PR trigger)
+- `docs/ai/00-context.md`
+- `services/code-intel-mcp/README.md`
+- `services/indexer/README.md`
+- `docker/README.md`

@@ -5,6 +5,7 @@ import {
   type JsonRpcRequest,
   type JsonRpcResponse,
   type ToolDescriptor,
+  type ToolOptionDescriptor,
   type ToolName,
   type ToolResponse
 } from './contracts.ts';
@@ -46,6 +47,23 @@ function isJsonRpcRequest(value: unknown): value is JsonRpcRequest {
   return candidate.jsonrpc === '2.0' && typeof candidate.method === 'string';
 }
 
+function createOptionInputSchema(descriptor: ToolOptionDescriptor): Record<string, unknown> {
+  const optionSchema: Record<string, unknown> = {
+    type: descriptor.type,
+    description: descriptor.description
+  };
+
+  if (descriptor.type === 'array' && descriptor.items) {
+    optionSchema.items = descriptor.items;
+  }
+
+  if (descriptor.default !== undefined) {
+    optionSchema.default = descriptor.default;
+  }
+
+  return optionSchema;
+}
+
 function createMcpToolInputSchema(tool: ToolDescriptor): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required = tool.requiredRequestFields.filter((field) => field !== 'options');
@@ -81,16 +99,7 @@ function createMcpToolInputSchema(tool: ToolDescriptor): Record<string, unknown>
   if (tool.options) {
     const optionProperties: Record<string, unknown> = {};
     for (const [optionName, descriptor] of Object.entries(tool.options)) {
-      const optionSchema: Record<string, unknown> = {
-        type: descriptor.type,
-        description: descriptor.description
-      };
-      if (descriptor.default === undefined) {
-        optionProperties[optionName] = optionSchema;
-      } else {
-        optionSchema.default = descriptor.default;
-        optionProperties[optionName] = optionSchema;
-      }
+      optionProperties[optionName] = createOptionInputSchema(descriptor);
     }
 
     properties.options = {
