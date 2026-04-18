@@ -191,8 +191,13 @@ export interface JsonRpcResponse {
   error?: JsonRpcError;
 }
 
+export type JsonSchemaPrimitiveType = 'string' | 'number' | 'boolean';
+
 export interface ToolOptionDescriptor {
-  type: 'string' | 'number' | 'boolean' | 'string[]';
+  type: JsonSchemaPrimitiveType | 'array';
+  items?: {
+    type: JsonSchemaPrimitiveType;
+  };
   required: boolean;
   default?: string | number | boolean | string[];
   description: string;

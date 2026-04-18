@@ -321,8 +321,21 @@ describe('mcp skeleton server', () => {
     expect(json.jsonrpc).toBe('2.0');
     expect(json.id).toBe(2);
     const searchTextTool = json.result.tools.find((tool) => tool.name === 'searchText');
+    const fileOutlineTool = json.result.tools.find((tool) => tool.name === 'getFileOutline');
     expect(searchTextTool).toBeDefined();
     expect(searchTextTool?.inputSchema.properties.options).toBeDefined();
+    expect(fileOutlineTool?.inputSchema.properties.options).toBeDefined();
+    expect(fileOutlineTool?.inputSchema.properties.options).toMatchObject({
+      type: 'object',
+      properties: {
+        symbolKinds: {
+          type: 'array',
+          items: {
+            type: 'string'
+          }
+        }
+      }
+    });
 
     await close();
     runningServer = undefined;

@@ -1,6 +1,6 @@
 {
   "name": "code-dev-intel.ts",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": false,
   "type": "module",
   "description": "Self-hosted AI code intelligence for TypeScript — symbol resolution, structural search, duplicate detection, and dependency graphs via MCP server.",
@@ -35,6 +35,7 @@
   "files": [
     "dist/",
     "schemas/",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md"
   ],

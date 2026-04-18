@@ -45,7 +45,10 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       requiredRequestFields: ['workspaceRoot', 'filePath'],
       options: {
         symbolKinds: {
-          type: 'string[]',
+          type: 'array',
+          items: {
+            type: 'string'
+          },
           required: false,
           description: 'Optional list of symbol kinds to include.'
         }
