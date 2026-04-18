@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { relative, resolve } from 'node:path';
 import type { StructMatch, StructSearchResult } from './contracts.ts';
 import { assertWithinWorkspace } from './safe-path.ts';
@@ -26,6 +27,11 @@ type AstGrepPostinstallRunner = (
   scriptPath: string,
   options: { cwd: string; encoding: BufferEncoding; timeout: number; maxBuffer: number }
 ) => { status: number | null; stdout: string; stderr: string; error?: unknown };
+
+interface CommandSpec {
+  command: string;
+  args: string[];
+}
 
 let astGrepRunner: AstGrepRunner = (command, args, options) =>
   safeSpawnSync(command, args, {
@@ -99,10 +105,93 @@ function getPnpmExecutable(): string {
   return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 }
 
+function quotePowerShellArgument(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function createPnpmCommandSpec(args: string[]): CommandSpec {
+  const pnpmCommand = getPnpmExecutable();
+
+  if (process.platform !== 'win32') {
+    return {
+      command: pnpmCommand,
+      args
+    };
+  }
+
+  const commandLine = ['&', ...[pnpmCommand, ...args].map((value) => quotePowerShellArgument(value))].join(' ');
+  return {
+    command: 'powershell.exe',
+    args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', commandLine]
+  };
+}
+
+function getPackageRoot(): string {
+  let currentPath = resolve(fileURLToPath(import.meta.url), '..');
+
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (existsSync(resolve(currentPath, 'package.json'))) {
+      return currentPath;
+    }
+
+    const parentPath = resolve(currentPath, '..');
+    if (parentPath === currentPath) {
+      break;
+    }
+
+    currentPath = parentPath;
+  }
+
+  return process.cwd();
+}
+
 function getLocalAstGrepExecutable(toolRoot: string): string | null {
   const executableName = process.platform === 'win32' ? 'ast-grep.exe' : 'ast-grep';
   const executablePath = resolve(toolRoot, 'node_modules', '@ast-grep', 'cli', executableName);
   return existsSync(executablePath) ? executablePath : null;
+}
+
+function createAstGrepRunArgs(workspaceRoot: string, pattern: string, language: string): string[] {
+  return ['run', '--pattern', pattern, '--lang', language, '--json=stream', workspaceRoot];
+}
+
+function createPnpmExecArgs(workspaceRoot: string, pattern: string, language: string): string[] {
+  return ['--ignore-workspace', 'exec', 'ast-grep', ...createAstGrepRunArgs(workspaceRoot, pattern, language)];
+}
+
+function createPnpmDlxArgs(workspaceRoot: string, pattern: string, language: string): string[] {
+  return [
+    '--ignore-workspace',
+    '--package=@ast-grep/cli',
+    'dlx',
+    'ast-grep',
+    ...createAstGrepRunArgs(workspaceRoot, pattern, language)
+  ];
+}
+
+function resolveExecAstGrepResult(
+  initialResult: { status: number | null; stdout: string; stderr: string; error?: unknown },
+  command: string,
+  execArgs: string[],
+  toolRoot: string,
+  timeout: number,
+  maxBuffer: number
+): { status: number | null; stdout: string; stderr: string; error?: unknown } | null {
+  if (!isAstGrepUnavailable(initialResult)) {
+    return initialResult;
+  }
+
+  const repaired = tryRepairAstGrepBinary(toolRoot, timeout, maxBuffer);
+  if (!repaired) {
+    return null;
+  }
+
+  return astGrepRunner(command, execArgs, {
+    cwd: toolRoot,
+    encoding: 'utf8',
+    timeout,
+    maxBuffer
+  });
 }
 
 function runAstGrep(
@@ -112,21 +201,18 @@ function runAstGrep(
 ): { status: number | null; stdout: string; stderr: string; error?: unknown } {
   const timeout = parseSpawnTimeoutFromEnv();
   const maxBuffer = parseSpawnMaxBufferFromEnv();
-  const command = getPnpmExecutable();
-  const toolRoot = process.cwd();
-  const localAstGrepExecutable = getLocalAstGrepExecutable(toolRoot);
+  const packageRoot = getPackageRoot();
+  const localAstGrepExecutable = getLocalAstGrepExecutable(packageRoot);
+  const execArgs = createPnpmExecArgs(workspaceRoot, pattern, language);
+  const execCommand = createPnpmCommandSpec(execArgs);
 
   if (localAstGrepExecutable) {
-    const localBinaryResult = astGrepRunner(
-      localAstGrepExecutable,
-      ['run', '--pattern', pattern, '--lang', language, '--json=stream', workspaceRoot],
-      {
-        cwd: toolRoot,
-        encoding: 'utf8',
-        timeout,
-        maxBuffer
-      }
-    );
+    const localBinaryResult = astGrepRunner(localAstGrepExecutable, createAstGrepRunArgs(workspaceRoot, pattern, language), {
+      cwd: packageRoot,
+      encoding: 'utf8',
+      timeout,
+      maxBuffer
+    });
 
     if (localBinaryResult.status === 0) {
       return localBinaryResult;
@@ -137,92 +223,38 @@ function runAstGrep(
     }
   }
 
-  const localExecResult = astGrepRunner(
-    command,
-    [
-      '--ignore-workspace',
-      'exec',
-      'ast-grep',
-      'run',
-      '--pattern',
-      pattern,
-      '--lang',
-      language,
-      '--json=stream',
-      workspaceRoot
-    ],
-    {
-      cwd: toolRoot,
-      encoding: 'utf8',
-      timeout,
-      maxBuffer
-    }
-  );
+  const localExecResult = astGrepRunner(execCommand.command, execCommand.args, {
+    cwd: workspaceRoot,
+    encoding: 'utf8',
+    timeout,
+    maxBuffer
+  });
 
   if (localExecResult.status === 0) {
     return localExecResult;
   }
 
-  if (isAstGrepUnavailable(localExecResult)) {
-    const repaired = tryRepairAstGrepBinary(toolRoot, timeout, maxBuffer);
-    if (repaired) {
-      const rerunResult = astGrepRunner(
-        command,
-        [
-          '--ignore-workspace',
-          'exec',
-          'ast-grep',
-          'run',
-          '--pattern',
-          pattern,
-          '--lang',
-          language,
-          '--json=stream',
-          workspaceRoot
-        ],
-        {
-          cwd: toolRoot,
-          encoding: 'utf8',
-          timeout,
-          maxBuffer
-        }
-      );
-
-      if (rerunResult.status === 0) {
-        return rerunResult;
-      }
-
-      if (!isAstGrepUnavailable(rerunResult)) {
-        return rerunResult;
-      }
-    }
-  }
-
-  if (!isAstGrepUnavailable(localExecResult)) {
-    return localExecResult;
-  }
-
-  return astGrepRunner(
-    command,
-    [
-      '--ignore-workspace',
-      'dlx',
-      '@ast-grep/cli',
-      'run',
-      '--pattern',
-      pattern,
-      '--lang',
-      language,
-      '--json=stream',
-      workspaceRoot
-    ],
-    {
-      cwd: toolRoot,
-      encoding: 'utf8',
-      timeout,
-      maxBuffer
-    }
+  const resolvedExecResult = resolveExecAstGrepResult(
+    localExecResult,
+    execCommand.command,
+    execCommand.args,
+    packageRoot,
+    timeout,
+    maxBuffer
   );
+
+  if (resolvedExecResult) {
+    return resolvedExecResult;
+  }
+
+  const dlxCommand = createPnpmCommandSpec(createPnpmDlxArgs(workspaceRoot, pattern, language));
+
+  return astGrepRunner(dlxCommand.command, dlxCommand.args, {
+    cwd: workspaceRoot,
+    encoding: 'utf8',
+    timeout,
+    maxBuffer
+  });
 }
 
 function tryRepairAstGrepBinary(toolRoot: string, timeout: number, maxBuffer: number): boolean {

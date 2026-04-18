@@ -1,6 +1,6 @@
 {
   "name": "code-dev-intel.ts",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": false,
   "type": "module",
   "description": "Self-hosted AI code intelligence for TypeScript — symbol resolution, structural search, duplicate detection, and dependency graphs via MCP server.",
@@ -74,7 +74,6 @@
     "docker:zoekt:down": "docker compose -f docker/docker-compose.yml --profile core --profile zoekt-optional down"
   },
   "devDependencies": {
-    "@ast-grep/cli": "^0.40.5",
     "@eslint/js": "^9.36.0",
     "@types/node": "^24.3.0",
     "@types/picomatch": "^4.0.2",
@@ -85,6 +84,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@ast-grep/cli": "^0.40.5",
     "picomatch": "^4.0.3",
     "typescript": "^5.9.3",
     "zod": "^4.3.6"

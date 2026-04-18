@@ -148,6 +148,36 @@ function extractPid(stdout) {
   return pid;
 }
 
+function requestJson(url, body) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `fetch(${JSON.stringify(url)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(
+        JSON.stringify(body)
+      )} }).then(async (response) => { const payload = await response.text(); process.stdout.write(JSON.stringify({ status: response.status, body: payload })); }).catch((error) => { console.error(error.message); process.exit(1); });`
+    ],
+    {
+      encoding: 'utf8',
+      windowsHide: true
+    }
+  );
+
+  if (result.error) {
+    throw new Error(`request failed: ${result.error.message}`);
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`request failed: ${result.stderr?.trim() || result.stdout?.trim() || 'unknown error'}`);
+  }
+
+  const parsed = JSON.parse(result.stdout);
+  return {
+    status: parsed.status,
+    body: JSON.parse(parsed.body)
+  };
+}
+
 async function main() {
   const version = getVersion();
   const port = Number.parseInt(readOption('port') || '', 10) || await getAvailablePort();
@@ -171,6 +201,8 @@ async function main() {
       )
     );
 
+    writeFileSync(resolve(tempProject, 'sample.ts'), ['export interface SmokeTestShape {', '  id: string;', '  label: string;', '}', '', 'const smokeValue = 42;'].join('\n'));
+
     runCommand('pnpm', ['install'], { cwd: tempProject }, 'pnpm install');
 
     const ensureResult = runCommand(
@@ -189,6 +221,22 @@ async function main() {
       'status'
     );
 
+    const searchStructResult = requestJson(`http://127.0.0.1:${port}/tools/searchStruct`, {
+      workspaceRoot: tempProject,
+      query: 'const smokeValue = 42;',
+      options: {
+        language: 'ts'
+      }
+    });
+
+    if (searchStructResult.status !== 200 || searchStructResult.body.ok !== true) {
+      throw new Error(`searchStruct smoke failed: ${JSON.stringify(searchStructResult.body)}`);
+    }
+
+    if (!Array.isArray(searchStructResult.body.data?.matches) || searchStructResult.body.data.matches.length === 0) {
+      throw new Error(`searchStruct smoke returned no matches: ${JSON.stringify(searchStructResult.body)}`);
+    }
+
     console.log(
       JSON.stringify(
         {
@@ -198,7 +246,8 @@ async function main() {
           tempProject,
           serverPid,
           ensureStdout: ensureResult.stdout.trim(),
-          statusStdout: statusResult.stdout.trim()
+          statusStdout: statusResult.stdout.trim(),
+          searchStructMatches: searchStructResult.body.data.matches.length
         },
         null,
         2

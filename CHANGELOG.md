@@ -2,6 +2,18 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.1.8 - 2026-04-18
+
+### Fixed
+
+- Fixed `searchStruct` in consumer projects by resolving the `ast-grep` binary from the package root instead of the consuming workspace root.
+- Fixed the `pnpm dlx` fallback for `@ast-grep/cli` by selecting the `ast-grep` binary explicitly, avoiding the multiple-binaries failure.
+- Added `@ast-grep/cli` as a runtime dependency so structural search works in installed package usage, not only in the package repository.
+
+### Changed
+
+- Extended the release smoke test to execute a real `searchStruct` call against a temporary consumer project before considering a release valid.
+
 ## 0.1.7 - 2026-04-18
 
 ### Fixed

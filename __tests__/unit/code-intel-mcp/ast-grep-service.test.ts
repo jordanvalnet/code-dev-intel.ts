@@ -12,6 +12,10 @@ afterEach(() => {
   resetAstGrepPostinstallRunnerForTests();
 });
 
+function expectCommandIncludes(args: string[], expectedFragment: string): void {
+  expect(args.join(' ').replaceAll("'", '')).toContain(expectedFragment);
+}
+
 describe('ast-grep-service', () => {
   it('parses stream json matches', () => {
     setAstGrepRunnerForTests(() => ({
@@ -108,7 +112,7 @@ describe('ast-grep-service', () => {
       }
 
       if (invocation === 2) {
-        expect(args.slice(0, 3)).toEqual(['--ignore-workspace', 'exec', 'ast-grep']);
+        expectCommandIncludes(args, '--ignore-workspace exec ast-grep');
         return {
           status: 1,
           stdout: 'ast-grep shim file was executed',
@@ -116,7 +120,7 @@ describe('ast-grep-service', () => {
         };
       }
 
-      expect(args.slice(0, 4)).toEqual(['--ignore-workspace', 'dlx', '@ast-grep/cli', 'run']);
+      expectCommandIncludes(args, '--ignore-workspace --package=@ast-grep/cli dlx ast-grep run');
       return {
         status: 0,
         stdout: [
@@ -157,7 +161,7 @@ describe('ast-grep-service', () => {
       }
 
       if (invocation === 2) {
-        expect(args.slice(0, 3)).toEqual(['--ignore-workspace', 'exec', 'ast-grep']);
+        expectCommandIncludes(args, '--ignore-workspace exec ast-grep');
         return {
           status: 1,
           stdout: 'ast-grep shim file was executed',
@@ -165,7 +169,7 @@ describe('ast-grep-service', () => {
         };
       }
 
-      expect(args.slice(0, 3)).toEqual(['--ignore-workspace', 'exec', 'ast-grep']);
+      expectCommandIncludes(args, '--ignore-workspace exec ast-grep');
       return {
         status: 0,
         stdout: [
