@@ -12,6 +12,7 @@ import {
 import { createToolsDescribePayload } from './health-handler.ts';
 import { createToolPayload, createToolRequestFromBody, createFindDuplicatesPayload } from './tool-handler.ts';
 import { HttpError } from './server-utils.ts';
+import { logger } from './logger.ts';
 
 export type McpPostResponse = {
   statusCode: number;
@@ -238,7 +239,13 @@ async function processMcpToolCall(
       return createMcpErrorResponse(error.statusCode, -32602, error.message, requestBody, id);
     }
 
-    return createMcpErrorResponse(500, -32603, 'Internal error', requestBody, id);
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('mcp tool execution failed', {
+      tool: name,
+      message,
+      stack: error instanceof Error ? error.stack : undefined
+    });
+    return createMcpErrorResponse(500, -32603, `Internal error: ${message}`, requestBody, id);
   }
 }
 
