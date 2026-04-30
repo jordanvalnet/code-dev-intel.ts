@@ -397,6 +397,44 @@ describe('mcp skeleton server', () => {
     runningServer = undefined;
   });
 
+  it('surfaces underlying error message when an MCP tool throws', async () => {
+    const { baseUrl, close } = await startServer();
+    const workspaceRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
+
+    const response = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 99,
+        method: 'tools/call',
+        params: {
+          name: 'getFileOutline',
+          arguments: {
+            workspaceRoot,
+            filePath: 'src/does-not-exist.ts'
+          }
+        }
+      })
+    });
+
+    const json = (await response.json()) as {
+      jsonrpc: string;
+      id: number;
+      error: { code: number; message: string };
+    };
+
+    expect(response.status).toBe(500);
+    expect(json.jsonrpc).toBe('2.0');
+    expect(json.id).toBe(99);
+    expect(json.error.code).toBe(-32603);
+    expect(json.error.message).toContain('file not found');
+    expect(json.error.message).not.toBe('Internal error');
+
+    await close();
+    runningServer = undefined;
+  });
+
   it('returns JSON-RPC method not found for unknown MCP method', async () => {
     const { baseUrl, close } = await startServer();
 

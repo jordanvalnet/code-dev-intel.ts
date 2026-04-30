@@ -2,6 +2,13 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.1.9 - 2026-04-30
+
+### Fixed
+
+- Surface the underlying error message when an MCP tool throws (e.g. `file not found: <path>` for `getFileOutline`, `getSymbolContent`, etc.) instead of the opaque `Internal error`.
+- Log tool execution failures to stderr with tool name, message and stack trace so MCP clients can debug invalid input or workspace issues.
+
 ## 0.1.8 - 2026-04-18
 
 ### Fixed
