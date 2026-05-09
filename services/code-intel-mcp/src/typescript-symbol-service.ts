@@ -91,6 +91,105 @@ function findSymbolOffset(fileContent: string, symbol: string): number {
   return offset;
 }
 
+function getDeclaredName(node: ts.Node): string | undefined {
+  if (
+    ts.isFunctionDeclaration(node) ||
+    ts.isClassDeclaration(node) ||
+    ts.isInterfaceDeclaration(node) ||
+    ts.isTypeAliasDeclaration(node) ||
+    ts.isEnumDeclaration(node) ||
+    ts.isModuleDeclaration(node)
+  ) {
+    return node.name?.getText();
+  }
+
+  if (
+    ts.isVariableDeclaration(node) ||
+    ts.isPropertyDeclaration(node) ||
+    ts.isPropertySignature(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isMethodSignature(node) ||
+    ts.isEnumMember(node)
+  ) {
+    if (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) {
+      return node.name.getText().replace(/^['"]|['"]$/g, '');
+    }
+    return undefined;
+  }
+
+  if (ts.isExportSpecifier(node) || ts.isImportSpecifier(node)) {
+    return node.name.getText();
+  }
+
+  return undefined;
+}
+
+function findDeclarationOffset(sourceFile: ts.SourceFile, symbol: string): number | undefined {
+  let result: number | undefined;
+
+  function visit(node: ts.Node): void {
+    if (result !== undefined) {
+      return;
+    }
+
+    const declaredName = getDeclaredName(node);
+    if (declaredName === symbol) {
+      const nameNode =
+        (node as ts.Declaration & { name?: ts.Node }).name ?? node;
+      result = nameNode.getStart(sourceFile);
+      return;
+    }
+
+    node.forEachChild(visit);
+  }
+
+  visit(sourceFile);
+  return result;
+}
+
+function findIdentifierOffset(sourceFile: ts.SourceFile, symbol: string): number | undefined {
+  let result: number | undefined;
+
+  function visit(node: ts.Node): void {
+    if (result !== undefined) {
+      return;
+    }
+
+    if (ts.isIdentifier(node) && node.getText() === symbol) {
+      result = node.getStart(sourceFile);
+      return;
+    }
+
+    node.forEachChild(visit);
+  }
+
+  visit(sourceFile);
+  return result;
+}
+
+function resolveSymbolAnchorOffset(sourceFile: ts.SourceFile, symbol: string): number {
+  const declarationOffset = findDeclarationOffset(sourceFile, symbol);
+  if (declarationOffset !== undefined) {
+    return declarationOffset;
+  }
+
+  const identifierOffset = findIdentifierOffset(sourceFile, symbol);
+  if (identifierOffset !== undefined) {
+    return identifierOffset;
+  }
+
+  return findSymbolOffset(sourceFile.getFullText(), symbol);
+}
+
+function isWithinNodeModules(filePath: string): boolean {
+  const normalized = filePath.replaceAll('\\', '/');
+  return normalized.includes('/node_modules/') || normalized.startsWith('node_modules/');
+}
+
+function isAmbientDeclarationFile(filePath: string): boolean {
+  return filePath.replaceAll('\\', '/').toLowerCase().endsWith('.d.ts');
+}
+
 function resolveProjectContext(workspaceRoot: string): ProjectContext {
   const tsconfigPath = ts.findConfigFile(workspaceRoot, (fileName) => ts.sys.fileExists(fileName), 'tsconfig.json');
 
@@ -496,19 +595,51 @@ function handleExternalDependency(params: {
   addEdge(params.edgeSet, params.edges, params.currentRelativePath, params.specifier, 'external');
 }
 
+export interface SymbolResolutionOptions {
+  includeNodeModules?: boolean;
+  includeDeclarationFiles?: boolean;
+}
+
+function applyResolutionFilters(
+  locations: SymbolLocation[],
+  options: SymbolResolutionOptions | undefined
+): SymbolLocation[] {
+  const includeNodeModules = options?.includeNodeModules === true;
+  const includeDeclarationFiles = options?.includeDeclarationFiles === true;
+
+  if (includeNodeModules && includeDeclarationFiles) {
+    return locations;
+  }
+
+  return locations.filter((location) => {
+    if (!includeNodeModules && isWithinNodeModules(location.filePath)) {
+      return false;
+    }
+    if (!includeDeclarationFiles && isAmbientDeclarationFile(location.filePath)) {
+      return false;
+    }
+    return true;
+  });
+}
+
 export function findDefinitionsBySymbol(
   workspaceRoot: string,
   filePath: string,
-  symbol: string
+  symbol: string,
+  options?: SymbolResolutionOptions
 ): SymbolQueryResult {
   const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
   const languageService = createLanguageService(workspaceRoot, resolvedFilePath);
-  const sourceContent = readFileSync(resolvedFilePath, 'utf8');
-  const offset = findSymbolOffset(sourceContent, symbol);
+  const program = languageService.getProgram();
+  const requestSourceFile = program?.getSourceFile(resolvedFilePath);
+  if (!requestSourceFile) {
+    throw new Error(`unable to read source file: ${resolvedFilePath}`);
+  }
+  const offset = resolveSymbolAnchorOffset(requestSourceFile, symbol);
 
   const definitions = languageService.getDefinitionAtPosition(resolvedFilePath, offset) ?? [];
 
-  const locations = definitions
+  const rawLocations = definitions
     .map((definition) => {
       const sourceFile = languageService.getProgram()?.getSourceFile(definition.fileName);
       if (!sourceFile) {
@@ -522,23 +653,28 @@ export function findDefinitionsBySymbol(
   return {
     symbol,
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
-    locations
+    locations: applyResolutionFilters(rawLocations, options)
   };
 }
 
 export function findReferencesBySymbol(
   workspaceRoot: string,
   filePath: string,
-  symbol: string
+  symbol: string,
+  options?: SymbolResolutionOptions
 ): SymbolQueryResult {
   const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
   const languageService = createLanguageService(workspaceRoot, resolvedFilePath);
-  const sourceContent = readFileSync(resolvedFilePath, 'utf8');
-  const offset = findSymbolOffset(sourceContent, symbol);
+  const program = languageService.getProgram();
+  const requestSourceFile = program?.getSourceFile(resolvedFilePath);
+  if (!requestSourceFile) {
+    throw new Error(`unable to read source file: ${resolvedFilePath}`);
+  }
+  const offset = resolveSymbolAnchorOffset(requestSourceFile, symbol);
 
   const references = languageService.getReferencesAtPosition(resolvedFilePath, offset) ?? [];
 
-  const locations = references
+  const rawLocations = references
     .map((reference) => {
       const sourceFile = languageService.getProgram()?.getSourceFile(reference.fileName);
       if (!sourceFile) {
@@ -552,23 +688,28 @@ export function findReferencesBySymbol(
   return {
     symbol,
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
-    locations
+    locations: applyResolutionFilters(rawLocations, options)
   };
 }
 
 export function findImplementationsBySymbol(
   workspaceRoot: string,
   filePath: string,
-  symbol: string
+  symbol: string,
+  options?: SymbolResolutionOptions
 ): SymbolQueryResult {
   const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
   const languageService = createLanguageService(workspaceRoot, resolvedFilePath);
-  const sourceContent = readFileSync(resolvedFilePath, 'utf8');
-  const offset = findSymbolOffset(sourceContent, symbol);
+  const program = languageService.getProgram();
+  const requestSourceFile = program?.getSourceFile(resolvedFilePath);
+  if (!requestSourceFile) {
+    throw new Error(`unable to read source file: ${resolvedFilePath}`);
+  }
+  const offset = resolveSymbolAnchorOffset(requestSourceFile, symbol);
 
   const implementations = resolveImplementationEntries(languageService, resolvedFilePath, offset);
 
-  const locations = implementations
+  const rawLocations = implementations
     .map((implementation) => {
       const sourceFile = languageService.getProgram()?.getSourceFile(implementation.fileName);
       if (!sourceFile) {
@@ -583,14 +724,14 @@ export function findImplementationsBySymbol(
   return {
     symbol,
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
-    locations
+    locations: applyResolutionFilters(rawLocations, options)
   };
 }
 
 export function getFileOutline(
   workspaceRoot: string,
   filePath: string,
-  options?: { symbolKinds?: string[] }
+  options?: { symbolKinds?: string[]; summaryOnly?: boolean }
 ): FileOutlineResult {
   const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
   const languageService = createLanguageService(workspaceRoot, resolvedFilePath);
@@ -604,6 +745,7 @@ export function getFileOutline(
   }
 
   const allowedKinds = normalizeSymbolKindFilters(options);
+  const summaryOnly = options?.summaryOnly === true;
 
   const allSymbols = (navTree.childItems ?? [])
     .map((item) => toFileOutlineItem(sourceFile, checker, item))
@@ -613,7 +755,12 @@ export function getFileOutline(
 
   for (const item of symbols) {
     const kindBucket = symbolsByKind[item.kind] ?? [];
-    kindBucket.push(item.symbol);
+    if (summaryOnly) {
+      const { name, startLine, startColumn, endLine, endColumn } = item.symbol;
+      kindBucket.push({ name, startLine, startColumn, endLine, endColumn });
+    } else {
+      kindBucket.push(item.symbol);
+    }
     symbolsByKind[item.kind] = kindBucket;
   }
 
@@ -624,15 +771,47 @@ export function getFileOutline(
   };
 }
 
+export interface GetSymbolContentOptions {
+  maxLines?: number;
+}
+
+const TRUNCATION_MARKER = '/* … truncated by getSymbolContent maxLines … */';
+
+function truncateContent(
+  content: string,
+  maxLines: number
+): { content: string; truncated: boolean; truncatedAtLine?: number } {
+  if (!Number.isFinite(maxLines) || maxLines <= 0) {
+    return { content, truncated: false };
+  }
+
+  const lines = content.split('\n');
+  if (lines.length <= maxLines) {
+    return { content, truncated: false };
+  }
+
+  const head = lines.slice(0, maxLines).join('\n');
+  return {
+    content: `${head}\n${TRUNCATION_MARKER}`,
+    truncated: true,
+    truncatedAtLine: maxLines
+  };
+}
+
 export function getSymbolContent(
   workspaceRoot: string,
   filePath: string,
-  symbol: string
+  symbol: string,
+  options?: GetSymbolContentOptions
 ): SymbolContentResult {
   const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
   const languageService = createLanguageService(workspaceRoot, resolvedFilePath);
-  const sourceContent = readFileSync(resolvedFilePath, 'utf8');
-  const offset = findSymbolOffset(sourceContent, symbol);
+  const program = languageService.getProgram();
+  const requestSourceFile = program?.getSourceFile(resolvedFilePath);
+  if (!requestSourceFile) {
+    throw new Error(`unable to read source file: ${resolvedFilePath}`);
+  }
+  const offset = resolveSymbolAnchorOffset(requestSourceFile, symbol);
 
   const definitions = languageService.getDefinitionAtPosition(resolvedFilePath, offset) ?? [];
   const targetDefinition = definitions[0];
@@ -652,6 +831,11 @@ export function getSymbolContent(
   const start = toLineColumn(sourceFile, node.getStart(sourceFile));
   const end = toLineColumn(sourceFile, node.getEnd());
 
+  const rawContent = node.getText(sourceFile);
+  const maxLines = typeof options?.maxLines === 'number' ? options.maxLines : undefined;
+  const { content, truncated, truncatedAtLine } =
+    typeof maxLines === 'number' ? truncateContent(rawContent, maxLines) : { content: rawContent, truncated: false };
+
   return {
     symbol,
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
@@ -660,7 +844,9 @@ export function getSymbolContent(
     startColumn: start.column,
     endLine: end.line,
     endColumn: end.column,
-    content: node.getText(sourceFile)
+    content,
+    truncated,
+    ...(truncatedAtLine === undefined ? {} : { truncatedAtLine })
   };
 }
 

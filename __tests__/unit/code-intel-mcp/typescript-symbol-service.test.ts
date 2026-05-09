@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import {
   getDependencyGraph,
   getFileOutline,
+  getSymbolContent,
   findDefinitionsBySymbol,
   findImplementationsBySymbol,
   findReferencesBySymbol
@@ -67,5 +68,75 @@ describe('typescript-symbol-service', () => {
     expect(result.edges.some((edge) => edge.from === 'src/dep-level2.ts' && edge.to === 'src/dep-level1.ts')).toBe(
       true
     );
+  });
+
+  describe('symbol-anchor resolution (regression: bugs #2 + #3)', () => {
+    it('findDefinitions anchors on the declaration even when the symbol first appears in a comment', () => {
+      const result = findDefinitionsBySymbol(fixtureRoot, 'src/symbol-anchor.ts', 'targetSymbol');
+
+      expect(result.locations.length).toBeGreaterThan(0);
+      const declarationLocation = result.locations.find(
+        (location) => location.filePath === 'src/symbol-anchor.ts'
+      );
+      expect(declarationLocation).toBeDefined();
+      expect(declarationLocation?.startLine).toBeGreaterThanOrEqual(10);
+    });
+
+    it('findReferences includes the local declaration and the cross-file consumer', () => {
+      const result = findReferencesBySymbol(fixtureRoot, 'src/symbol-anchor.ts', 'targetSymbol');
+      const filePaths = new Set(result.locations.map((entry) => entry.filePath));
+      expect(filePaths.has('src/symbol-anchor.ts')).toBe(true);
+      expect(filePaths.has('src/symbol-anchor-usage.ts')).toBe(true);
+    });
+
+    it('findReferences excludes node_modules and *.d.ts results by default', () => {
+      const result = findReferencesBySymbol(fixtureRoot, 'src/symbol-anchor.ts', 'targetSymbol');
+      for (const location of result.locations) {
+        expect(location.filePath.includes('node_modules')).toBe(false);
+        expect(location.filePath.endsWith('.d.ts')).toBe(false);
+      }
+    });
+
+    it('getSymbolContent returns the declaration content even when the symbol first appears in a comment', () => {
+      const result = getSymbolContent(fixtureRoot, 'src/symbol-anchor.ts', 'targetSymbol');
+      expect(result.declarationFilePath).toBe('src/symbol-anchor.ts');
+      expect(result.content).toContain('export function targetSymbol');
+      expect(result.startLine).toBeGreaterThanOrEqual(10);
+    });
+  });
+
+  describe('getFileOutline summaryOnly option (bug #1)', () => {
+    it('omits the signature field when summaryOnly is true', () => {
+      const result = getFileOutline(fixtureRoot, 'src/definitions.ts', { summaryOnly: true });
+      const allItems = Object.values(result.symbolsByKind).flat();
+      expect(allItems.length).toBeGreaterThan(0);
+      for (const item of allItems) {
+        expect(item.signature).toBeUndefined();
+      }
+    });
+
+    it('includes the signature field when summaryOnly is omitted', () => {
+      const result = getFileOutline(fixtureRoot, 'src/definitions.ts');
+      const functionItems = result.symbolsByKind.function ?? [];
+      expect(functionItems.length).toBeGreaterThan(0);
+      expect(functionItems.some((item) => typeof item.signature === 'string' && item.signature.length > 0)).toBe(true);
+    });
+  });
+
+  describe('getSymbolContent maxLines truncation (bug #2 follow-up)', () => {
+    it('truncates content when maxLines is exceeded and exposes truncation metadata', () => {
+      const result = getSymbolContent(fixtureRoot, 'src/large-symbol.ts', 'largeSymbol', { maxLines: 5 });
+      expect(result.truncated).toBe(true);
+      expect(typeof result.truncatedAtLine).toBe('number');
+      const lineCount = result.content.split('\n').length;
+      expect(lineCount).toBeLessThanOrEqual(6);
+    });
+
+    it('returns the full content when the declaration fits inside maxLines', () => {
+      const result = getSymbolContent(fixtureRoot, 'src/large-symbol.ts', 'largeSymbol', { maxLines: 1000 });
+      expect(result.truncated).toBe(false);
+      expect(result.truncatedAtLine).toBeUndefined();
+      expect(result.content).toContain('field20');
+    });
   });
 });

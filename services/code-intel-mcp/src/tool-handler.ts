@@ -37,6 +37,18 @@ function createMockPayload(tool: ToolName, request: ToolRequest): ToolResponse {
   };
 }
 
+function readResolutionOptions(request: ToolRequest): {
+  includeNodeModules?: boolean;
+  includeDeclarationFiles?: boolean;
+} {
+  const includeNodeModules = request.options?.includeNodeModules;
+  const includeDeclarationFiles = request.options?.includeDeclarationFiles;
+  return {
+    includeNodeModules: includeNodeModules === true,
+    includeDeclarationFiles: includeDeclarationFiles === true
+  };
+}
+
 function createSymbolResolutionPayload(
   tool: 'findDefinitions' | 'findReferences' | 'findImplementations',
   request: ToolRequest
@@ -50,14 +62,15 @@ function createSymbolResolutionPayload(
     };
   }
 
+  const resolutionOptions = readResolutionOptions(request);
   let result: SymbolQueryResult;
 
   if (tool === 'findDefinitions') {
-    result = findDefinitionsBySymbol(request.workspaceRoot, request.filePath, request.symbol);
+    result = findDefinitionsBySymbol(request.workspaceRoot, request.filePath, request.symbol, resolutionOptions);
   } else if (tool === 'findReferences') {
-    result = findReferencesBySymbol(request.workspaceRoot, request.filePath, request.symbol);
+    result = findReferencesBySymbol(request.workspaceRoot, request.filePath, request.symbol, resolutionOptions);
   } else {
-    result = findImplementationsBySymbol(request.workspaceRoot, request.filePath, request.symbol);
+    result = findImplementationsBySymbol(request.workspaceRoot, request.filePath, request.symbol, resolutionOptions);
   }
 
   return {
@@ -143,9 +156,11 @@ function createFileOutlinePayload(request: ToolRequest): ToolResponse {
   const symbolKinds = Array.isArray(symbolKindsOption)
     ? symbolKindsOption.filter((item): item is string => typeof item === 'string')
     : undefined;
+  const summaryOnly = request.options?.summaryOnly === true;
 
   const result = getFileOutline(request.workspaceRoot, request.filePath, {
-    symbolKinds
+    symbolKinds,
+    summaryOnly
   });
 
   return {
@@ -168,13 +183,20 @@ function createSymbolContentPayload(request: ToolRequest): ToolResponse {
         startColumn: 0,
         endLine: 0,
         endColumn: 0,
-        content: ''
+        content: '',
+        truncated: false
       } as SymbolContentResult,
       error: 'filePath and symbol are required for getSymbolContent'
     };
   }
 
-  const result = getSymbolContent(request.workspaceRoot, request.filePath, request.symbol);
+  const maxLinesOption = request.options?.maxLines;
+  const maxLines =
+    typeof maxLinesOption === 'number' && Number.isFinite(maxLinesOption) && maxLinesOption > 0
+      ? Math.floor(maxLinesOption)
+      : undefined;
+
+  const result = getSymbolContent(request.workspaceRoot, request.filePath, request.symbol, { maxLines });
 
   return {
     ok: true,

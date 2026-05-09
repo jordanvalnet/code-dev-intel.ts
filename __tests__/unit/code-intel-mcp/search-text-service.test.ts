@@ -135,6 +135,38 @@ describe('search-text-service', () => {
     expect(result.matches[0]?.filePath).toBe('src/keep.ts');
   });
 
+  describe('engine fallback reason (regression: bug #4)', () => {
+    it('reports the underlying spawn error when falling back to node', () => {
+      const workspaceRoot = createWorkspaceFixture();
+
+      setRipgrepRunnerForTests(() => ({
+        status: null,
+        stdout: '',
+        stderr: 'spawn rg ENOENT',
+        error: new Error('spawn rg ENOENT')
+      }));
+
+      const result = searchTextWithRipgrep(workspaceRoot, 'buildGreeting');
+
+      expect(result.engine).toBe('node-fallback');
+      expect(result.engineFallbackReason).toBeDefined();
+      expect(result.engineFallbackReason).toContain('ENOENT');
+    });
+
+    it('does not set engineFallbackReason when ripgrep succeeds', () => {
+      setRipgrepRunnerForTests(() => ({
+        status: 0,
+        stdout: '',
+        stderr: ''
+      }));
+
+      const result = searchTextWithRipgrep('E:/workspace', 'buildGreeting');
+
+      expect(result.engine).toBe('ripgrep');
+      expect(result.engineFallbackReason).toBeUndefined();
+    });
+  });
+
   it('ignores gitignore patterns in node fallback', () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), 'dev-intel-text-search-gitignore-'));
     mkdirSync(join(workspaceRoot, 'src'), { recursive: true });

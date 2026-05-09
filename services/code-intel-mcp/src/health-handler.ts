@@ -24,19 +24,61 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'findDefinitions',
       endpoint: '/tools/findDefinitions',
       description: 'Find symbol definitions from filePath + symbol.',
-      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol']
+      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol'],
+      options: {
+        includeNodeModules: {
+          type: 'boolean',
+          required: false,
+          default: false,
+          description: 'Include matches inside node_modules (default false).'
+        },
+        includeDeclarationFiles: {
+          type: 'boolean',
+          required: false,
+          default: false,
+          description: 'Include matches inside *.d.ts ambient files (default false).'
+        }
+      }
     },
     {
       name: 'findReferences',
       endpoint: '/tools/findReferences',
       description: 'Find symbol references from filePath + symbol.',
-      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol']
+      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol'],
+      options: {
+        includeNodeModules: {
+          type: 'boolean',
+          required: false,
+          default: false,
+          description: 'Include matches inside node_modules (default false).'
+        },
+        includeDeclarationFiles: {
+          type: 'boolean',
+          required: false,
+          default: false,
+          description: 'Include matches inside *.d.ts ambient files (default false).'
+        }
+      }
     },
     {
       name: 'findImplementations',
       endpoint: '/tools/findImplementations',
       description: 'Find symbol implementations from filePath + symbol.',
-      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol']
+      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol'],
+      options: {
+        includeNodeModules: {
+          type: 'boolean',
+          required: false,
+          default: false,
+          description: 'Include matches inside node_modules (default false).'
+        },
+        includeDeclarationFiles: {
+          type: 'boolean',
+          required: false,
+          default: false,
+          description: 'Include matches inside *.d.ts ambient files (default false).'
+        }
+      }
     },
     {
       name: 'getFileOutline',
@@ -51,6 +93,12 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
           },
           required: false,
           description: 'Optional list of symbol kinds to include.'
+        },
+        summaryOnly: {
+          type: 'boolean',
+          required: false,
+          default: false,
+          description: 'Omit signature field to keep payload small on large files.'
         }
       }
     },
@@ -58,7 +106,14 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'getSymbolContent',
       endpoint: '/tools/getSymbolContent',
       description: 'Get full declaration content for a symbol.',
-      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol']
+      requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol'],
+      options: {
+        maxLines: {
+          type: 'number',
+          required: false,
+          description: 'Truncate content after N lines and set truncated=true (default: no truncation).'
+        }
+      }
     },
     {
       name: 'dependencyGraph',
