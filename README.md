@@ -136,9 +136,18 @@ Use for interfaces, abstract contracts, and implementation discovery.
 
 Use before reading a large file. This is the fastest way to understand the file structure.
 
+Options:
+
+- `symbolKinds: string[]` — keep only the listed kinds (e.g. `["function", "class"]`).
+- `summaryOnly: boolean` (default `false`) — omit the `signature` field for each symbol. Use this on large schema files to keep the response under MCP token limits.
+
 ### `getSymbolContent`
 
 Use when you want the full declaration body of one symbol instead of the entire file.
+
+Options:
+
+- `maxLines: number` (default unlimited) — truncate the returned `content` after N lines. The result includes `truncated: boolean` and (when truncated) `truncatedAtLine: number`.
 
 ### `dependencyGraph`
 
@@ -163,6 +172,17 @@ Example:
 ### `searchText`
 
 Use for literal strings, comments, log messages, config keys, or partial identifiers.
+
+The ripgrep binary is bundled via `@vscode/ripgrep`, so the tool works out of the box on Windows, macOS, and Linux without `rg` on the PATH. Override with `CODE_INTEL_RIPGREP_PATH` if needed.
+
+The result includes `engine: 'ripgrep' | 'node-fallback'` and (when falling back) `engineFallbackReason: string` so clients can debug why ripgrep was not used.
+
+### `findDefinitions` / `findReferences` / `findImplementations` filtering
+
+By default the resolver hides matches inside `node_modules/**` and `*.d.ts` ambient files. Opt back in with options:
+
+- `includeNodeModules: boolean` (default `false`)
+- `includeDeclarationFiles: boolean` (default `false`)
 
 ### `findDuplicates`
 

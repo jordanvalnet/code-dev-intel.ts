@@ -1,12 +1,15 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { relative, resolve } from 'node:path';
 import type { TextMatch, TextSearchResult } from './contracts.ts';
 import { assertWithinWorkspace } from './safe-path.ts';
 import { isCommandUnavailableError, safeSpawnSync } from './safe-spawn.ts';
 import { collectWorkspaceFiles } from './file-collection.ts';
+import { logger } from './logger.ts';
 
 const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.json']);
 const DEFAULT_MAX_RESULTS = 200;
+const ALLOWED_RIPGREP_BINARIES = ['rg', 'rg.exe', 'rg.cmd'];
 
 type RipgrepRunner = (
   command: string,
@@ -14,32 +17,73 @@ type RipgrepRunner = (
   options: { cwd: string; encoding: BufferEncoding; timeout: number; maxBuffer: number }
 ) => { status: number | null; stdout: string; stderr: string; error?: unknown };
 
-let ripgrepRunner: RipgrepRunner = (command, args, options) =>
+const defaultRipgrepRunner: RipgrepRunner = (command, args, options) =>
   safeSpawnSync(command, args, {
     cwd: options.cwd,
     encoding: options.encoding,
     timeoutMs: options.timeout,
     maxBufferBytes: options.maxBuffer,
-    allowedCommands: ['rg']
+    allowedCommands: ALLOWED_RIPGREP_BINARIES
   });
+
+let ripgrepRunner: RipgrepRunner = defaultRipgrepRunner;
+
+let cachedResolvedRipgrepPath: string | undefined;
+let resolvedRipgrepPathChecked = false;
+
+function resolveBundledRipgrepPath(): string | undefined {
+  if (resolvedRipgrepPathChecked) {
+    return cachedResolvedRipgrepPath;
+  }
+  resolvedRipgrepPathChecked = true;
+
+  const overridePath = process.env.CODE_INTEL_RIPGREP_PATH?.trim();
+  if (overridePath && existsSync(overridePath)) {
+    cachedResolvedRipgrepPath = overridePath;
+    return cachedResolvedRipgrepPath;
+  }
+
+  try {
+    const requireFromHere = createRequire(import.meta.url);
+    const arch = process.env.npm_config_arch || process.arch;
+    const binaryName = process.platform === 'win32' ? 'rg.exe' : 'rg';
+    const platformPkg = `@vscode/ripgrep-${process.platform}-${arch}`;
+    const resolved = requireFromHere.resolve(`${platformPkg}/bin/${binaryName}`);
+    if (existsSync(resolved)) {
+      cachedResolvedRipgrepPath = resolved;
+      return cachedResolvedRipgrepPath;
+    }
+  } catch (error) {
+    logger.warn('failed to resolve bundled @vscode/ripgrep binary', {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  return undefined;
+}
+
+export function resetBundledRipgrepPathCacheForTests(): void {
+  cachedResolvedRipgrepPath = undefined;
+  resolvedRipgrepPathChecked = false;
+}
 
 export function setRipgrepRunnerForTests(runner: RipgrepRunner): void {
   ripgrepRunner = runner;
 }
 
 export function resetRipgrepRunnerForTests(): void {
-  ripgrepRunner = (command, args, options) =>
-    safeSpawnSync(command, args, {
-      cwd: options.cwd,
-      encoding: options.encoding,
-      timeoutMs: options.timeout,
-      maxBufferBytes: options.maxBuffer,
-      allowedCommands: ['rg']
-    });
+  ripgrepRunner = defaultRipgrepRunner;
 }
 
+const RIPGREP_LINE_REGEX = /^((?:[A-Za-z]:)?[^:]+):(\d+):(\d+):(.*)$/;
+
 function parseRipgrepLine(workspaceRoot: string, line: string): TextMatch | undefined {
-  const [filePath, lineRaw, columnRaw, ...rest] = line.split(':');
+  const match = RIPGREP_LINE_REGEX.exec(line);
+  if (!match) {
+    return undefined;
+  }
+
+  const [, filePath, lineRaw, columnRaw, snippet] = match;
   if (!filePath || !lineRaw || !columnRaw) {
     return undefined;
   }
@@ -50,12 +94,11 @@ function parseRipgrepLine(workspaceRoot: string, line: string): TextMatch | unde
     return undefined;
   }
 
-  const snippet = rest.join(':').trim();
   return {
     filePath: relative(workspaceRoot, resolve(workspaceRoot, filePath)).replaceAll('\\', '/'),
     line: lineNumber,
     column: columnNumber,
-    snippet
+    snippet: (snippet ?? '').trim()
   };
 }
 
@@ -162,7 +205,8 @@ function searchWithNodeFallback(
   workspaceRoot: string,
   query: string,
   maxResults = DEFAULT_MAX_RESULTS,
-  searchPath?: string
+  searchPath?: string,
+  fallbackReason?: string
 ): TextSearchResult {
   const files = collectFiles(workspaceRoot, searchPath);
   const matches: TextMatch[] = [];
@@ -189,7 +233,8 @@ function searchWithNodeFallback(
         return {
           query,
           engine: 'node-fallback',
-          matches
+          matches,
+          ...(fallbackReason ? { engineFallbackReason: fallbackReason } : {})
         };
       }
     }
@@ -198,8 +243,27 @@ function searchWithNodeFallback(
   return {
     query,
     engine: 'node-fallback',
-    matches
+    matches,
+    ...(fallbackReason ? { engineFallbackReason: fallbackReason } : {})
   };
+}
+
+function describeRipgrepFailure(result: { status: number | null; stderr: string; error?: unknown }): string {
+  if (result.error instanceof Error) {
+    return result.error.message;
+  }
+  if (typeof result.error === 'string' && result.error.length > 0) {
+    return result.error;
+  }
+  if (typeof result.status === 'number' && result.status > 1) {
+    const stderr = result.stderr.trim();
+    return stderr.length > 0 ? `ripgrep exited with status ${result.status}: ${stderr}` : `ripgrep exited with status ${result.status}`;
+  }
+  if (result.status === null) {
+    const stderr = result.stderr.trim();
+    return stderr.length > 0 ? `ripgrep failed without exit status: ${stderr}` : 'ripgrep failed without exit status';
+  }
+  return 'ripgrep unavailable';
 }
 
 export function searchTextWithRipgrep(
@@ -237,7 +301,9 @@ export function searchTextWithRipgrep(
 
   args.push(query, ...includePaths.map((includePath) => resolve(safeWorkspaceRoot, includePath)));
 
-  const result = ripgrepRunner('rg', args, {
+  const ripgrepCommand = resolveBundledRipgrepPath() ?? 'rg';
+
+  const result = ripgrepRunner(ripgrepCommand, args, {
     cwd: safeWorkspaceRoot,
     encoding: 'utf8',
     timeout: parseSpawnTimeoutFromEnv(),
@@ -272,5 +338,6 @@ export function searchTextWithRipgrep(
     throw new Error('ripgrep execution failed');
   }
 
-  return searchWithNodeFallback(safeWorkspaceRoot, query, maxResults, searchPath);
+  const fallbackReason = describeRipgrepFailure(result);
+  return searchWithNodeFallback(safeWorkspaceRoot, query, maxResults, searchPath, fallbackReason);
 }

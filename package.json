@@ -1,6 +1,6 @@
 {
   "name": "code-dev-intel.ts",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
   "description": "Self-hosted AI code intelligence for TypeScript — symbol resolution, structural search, duplicate detection, and dependency graphs via MCP server.",
@@ -85,6 +85,7 @@
   },
   "dependencies": {
     "@ast-grep/cli": "^0.40.5",
+    "@vscode/ripgrep": "^1.18.0",
     "picomatch": "^4.0.3",
     "typescript": "^5.9.3",
     "zod": "^4.3.6"

@@ -114,6 +114,8 @@ export interface SymbolContentResult {
   endLine: number;
   endColumn: number;
   content: string;
+  truncated: boolean;
+  truncatedAtLine?: number;
 }
 
 export interface DependencyEdge {
@@ -156,6 +158,7 @@ export interface TextSearchResult {
   query: string;
   engine: 'ripgrep' | 'node-fallback';
   matches: TextMatch[];
+  engineFallbackReason?: string;
 }
 
 export interface HealthResponse {
