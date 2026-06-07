@@ -90,6 +90,53 @@ export interface SymbolQueryResult {
   locations: SymbolLocation[];
 }
 
+export interface CallSite {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
+
+export interface CallerEntry {
+  callerSymbol: string;
+  filePath: string;
+  callSite: CallSite;
+}
+
+export interface FindCallersResult {
+  symbol: string;
+  sourceFilePath: string;
+  callers: CallerEntry[];
+}
+
+export interface CalleeEntry {
+  calleeSymbol: string;
+  filePath: string;
+  callSite: CallSite;
+}
+
+export interface FindCalleesResult {
+  symbol: string;
+  sourceFilePath: string;
+  callees: CalleeEntry[];
+}
+
+export interface FindSymbolMatch {
+  name: string;
+  kind: string;
+  filePath: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  containerName?: string;
+}
+
+export interface FindSymbolResult {
+  symbol: string;
+  matches: FindSymbolMatch[];
+}
+
 export interface FileOutlineItem {
   name: string;
   startLine: number;
@@ -145,6 +192,7 @@ export interface StructSearchResult {
   pattern: string;
   language: string;
   matches: StructMatch[];
+  engineFallbackReason?: string;
 }
 
 export interface TextMatch {

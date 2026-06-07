@@ -1,10 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { relative, resolve } from 'node:path';
 import type { StructMatch, StructSearchResult } from './contracts.ts';
 import { assertWithinWorkspace } from './safe-path.ts';
 import { isCommandUnavailableError, safeSpawnSync } from './safe-spawn.ts';
+import { logger } from './logger.ts';
 
 interface AstGrepJsonMatch {
   file?: string;
@@ -60,6 +62,73 @@ let astGrepPostinstallRunner: AstGrepPostinstallRunner = (scriptPath, options) =
     error: runResult.error
   };
 };
+
+let cachedResolvedAstGrepPath: string | undefined;
+let resolvedAstGrepPathChecked = false;
+let bundledAstGrepPathOverrideForTests: string | null | undefined;
+
+function resolveAstGrepPlatformPackage(): { packageName: string; binaryName: string } {
+  const arch = process.env.npm_config_arch || process.arch;
+  const binaryName = process.platform === 'win32' ? 'ast-grep.exe' : 'ast-grep';
+
+  let abi: string | undefined;
+  if (process.platform === 'win32') {
+    abi = 'msvc';
+  } else if (process.platform === 'linux') {
+    abi = arch === 'arm' ? 'gnueabihf' : 'gnu';
+  }
+
+  const suffix = abi ? `${process.platform}-${arch}-${abi}` : `${process.platform}-${arch}`;
+  return { packageName: `@ast-grep/cli-${suffix}`, binaryName };
+}
+
+function resolveBundledAstGrepPath(): string | undefined {
+  if (bundledAstGrepPathOverrideForTests !== undefined) {
+    return bundledAstGrepPathOverrideForTests ?? undefined;
+  }
+
+  if (resolvedAstGrepPathChecked) {
+    return cachedResolvedAstGrepPath;
+  }
+  resolvedAstGrepPathChecked = true;
+
+  const overridePath = process.env.CODE_INTEL_ASTGREP_PATH?.trim();
+  if (overridePath && existsSync(overridePath)) {
+    cachedResolvedAstGrepPath = overridePath;
+    return cachedResolvedAstGrepPath;
+  }
+
+  try {
+    const requireFromHere = createRequire(import.meta.url);
+    const { packageName, binaryName } = resolveAstGrepPlatformPackage();
+    const resolved = requireFromHere.resolve(`${packageName}/${binaryName}`);
+    if (existsSync(resolved)) {
+      cachedResolvedAstGrepPath = resolved;
+      return cachedResolvedAstGrepPath;
+    }
+  } catch (error) {
+    logger.warn('failed to resolve bundled @ast-grep/cli platform binary', {
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+
+  return undefined;
+}
+
+export function resetBundledAstGrepPathCacheForTests(): void {
+  cachedResolvedAstGrepPath = undefined;
+  resolvedAstGrepPathChecked = false;
+  bundledAstGrepPathOverrideForTests = undefined;
+}
+
+/**
+ * Force the bundled-binary resolution result in tests.
+ * Pass `null` to simulate "no bundled binary available" so the pnpm exec/dlx
+ * fallback chain can be asserted deterministically across platforms.
+ */
+export function setBundledAstGrepPathForTests(path: string | null): void {
+  bundledAstGrepPathOverrideForTests = path;
+}
 
 export function setAstGrepRunnerForTests(runner: AstGrepRunner): void {
   astGrepRunner = runner;
@@ -202,6 +271,22 @@ function runAstGrep(
   const timeout = parseSpawnTimeoutFromEnv();
   const maxBuffer = parseSpawnMaxBufferFromEnv();
   const packageRoot = getPackageRoot();
+
+  // Preferred path: a directly-resolved bundled platform binary (no pnpm/network at runtime).
+  const bundledAstGrepPath = resolveBundledAstGrepPath();
+  if (bundledAstGrepPath) {
+    const bundledResult = astGrepRunner(bundledAstGrepPath, createAstGrepRunArgs(workspaceRoot, pattern, language), {
+      cwd: packageRoot,
+      encoding: 'utf8',
+      timeout,
+      maxBuffer
+    });
+
+    if (bundledResult.status === 0 || !isAstGrepUnavailable(bundledResult)) {
+      return bundledResult;
+    }
+  }
+
   const localAstGrepExecutable = getLocalAstGrepExecutable(packageRoot);
   const execArgs = createPnpmExecArgs(workspaceRoot, pattern, language);
   const execCommand = createPnpmCommandSpec(execArgs);
@@ -399,6 +484,19 @@ export function searchStructWithAstGrep(
   }
 
   if (runResult.status !== 0) {
+    // Graceful degrade: when the ast-grep binary is simply unavailable in this
+    // install (platform binary never fetched / shim not linked), do NOT 500.
+    // Mirror searchText's node-fallback behaviour and return an empty result
+    // annotated with the reason so callers can fall back to searchText/Grep.
+    if (isAstGrepUnavailable(runResult)) {
+      return {
+        pattern,
+        language,
+        matches: [],
+        engineFallbackReason: buildAstGrepError(runResult)
+      };
+    }
+
     throw new Error(`ast-grep execution failed: ${buildAstGrepError(runResult)}`);
   }
 

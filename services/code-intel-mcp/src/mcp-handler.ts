@@ -21,6 +21,26 @@ export type McpPostResponse = {
   skipResponse: boolean;
 };
 
+// Surfaced by MCP clients that read `initialize.instructions` and inject it into the
+// model's context — this is how code-intel earns default usage WITHOUT any consumer-side
+// AGENTS.md/CLAUDE.md forcing. Routes symbol-level intents to the precise tool and tells
+// the model why it beats reflexive Grep/Read (precise file:line results, no whole-file reads).
+const CODE_INTEL_USAGE_INSTRUCTIONS = [
+  'code-intel gives you type-aware code intelligence for TypeScript/JavaScript.',
+  'Prefer it over Grep/Glob/Read for any symbol-level task — it returns precise file:line results',
+  'and the exact symbol body, so you avoid grep noise and reading whole files (large context savings).',
+  '',
+  'Route by intent:',
+  '- "where is X used / all usages / call sites" -> findReferences (type-checked, no false hits in comments/strings)',
+  '- "where is X defined / declared / go to definition" -> findDefinitions',
+  '- the full body of one function/class/type -> getSymbolContent (not Read of the whole file)',
+  "- a file's structure/members before a targeted read -> getFileOutline",
+  '- who implements an interface/abstract/port -> findImplementations',
+  '- what a file imports / coupling -> dependencyGraph; blast radius of changed files -> impactedFiles',
+  '',
+  'Reach for Grep only for non-symbol text (string literals, comments, config keys, TODOs).'
+].join('\n');
+
 function createJsonRpcError(code: number, message: string, id: JsonRpcId = null, data?: unknown): JsonRpcResponse {
   const error: JsonRpcError = { code, message };
   if (data === undefined) {
@@ -272,7 +292,8 @@ async function dispatchMcpMethod(requestBody: JsonRpcRequest, startupWorkspaceRo
         tools: {
           listChanged: false
         }
-      }
+      },
+      instructions: CODE_INTEL_USAGE_INSTRUCTIONS
     });
   }
 

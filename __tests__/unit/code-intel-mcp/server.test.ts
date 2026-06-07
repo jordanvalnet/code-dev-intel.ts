@@ -828,6 +828,132 @@ describe('mcp skeleton server', () => {
     runningServer = undefined;
   });
 
+  it('resolves callers through findCallers endpoint', async () => {
+    const { baseUrl, close } = await startServer();
+    const workspaceRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
+
+    const response = await fetch(`${baseUrl}/tools/findCallers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceRoot,
+        filePath: 'src/call-hierarchy.ts',
+        symbol: 'targetCallee'
+      })
+    });
+
+    const json = (await response.json()) as {
+      ok: boolean;
+      data: { callers: Array<{ callerSymbol: string; filePath: string; callSite: { startLine: number } }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(true);
+    const callerSymbols = new Set(json.data.callers.map((entry) => entry.callerSymbol));
+    expect(callerSymbols.has('firstCaller')).toBe(true);
+    expect(callerSymbols.has('secondCaller')).toBe(true);
+    expect(json.data.callers[0]?.callSite.startLine).toBeGreaterThan(0);
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('returns an error payload when findCallers omits filePath/symbol', async () => {
+    const { baseUrl, close } = await startServer();
+    const workspaceRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
+
+    const response = await fetch(`${baseUrl}/tools/findCallers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceRoot })
+    });
+
+    const json = (await response.json()) as { ok: boolean; error?: string };
+
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(false);
+    expect(json.error).toContain('findCallers');
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('resolves callees through findCallees endpoint', async () => {
+    const { baseUrl, close } = await startServer();
+    const workspaceRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
+
+    const response = await fetch(`${baseUrl}/tools/findCallees`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceRoot,
+        filePath: 'src/call-hierarchy.ts',
+        symbol: 'targetCallee'
+      })
+    });
+
+    const json = (await response.json()) as {
+      ok: boolean;
+      data: { callees: Array<{ calleeSymbol: string }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(true);
+    const calleeSymbols = new Set(json.data.callees.map((entry) => entry.calleeSymbol));
+    expect(calleeSymbols.has('helperDouble')).toBe(true);
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('resolves a symbol by name only through findSymbol endpoint', async () => {
+    const { baseUrl, close } = await startServer();
+    const workspaceRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
+
+    const response = await fetch(`${baseUrl}/tools/findSymbol`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workspaceRoot,
+        symbol: 'buildGreeting'
+      })
+    });
+
+    const json = (await response.json()) as {
+      ok: boolean;
+      data: { symbol: string; matches: Array<{ name: string; filePath: string; kind: string }> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.symbol).toBe('buildGreeting');
+    expect(json.data.matches.some((match) => match.filePath === 'src/definitions.ts')).toBe(true);
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('describes findSymbol as requiring symbol but not filePath', async () => {
+    const { baseUrl, close } = await startServer();
+
+    const response = await fetch(`${baseUrl}/tools/describe`);
+    const json = (await response.json()) as {
+      tools: Array<{ name: string; requiredRequestFields: string[] }>;
+    };
+
+    const findSymbol = json.tools.find((tool) => tool.name === 'findSymbol');
+    expect(findSymbol?.requiredRequestFields).toContain('workspaceRoot');
+    expect(findSymbol?.requiredRequestFields).toContain('symbol');
+    expect(findSymbol?.requiredRequestFields).not.toContain('filePath');
+
+    const findCallers = json.tools.find((tool) => tool.name === 'findCallers');
+    expect(findCallers?.requiredRequestFields).toContain('filePath');
+    expect(findCallers?.requiredRequestFields).toContain('symbol');
+
+    await close();
+    runningServer = undefined;
+  });
+
   it('rejects invalid findDuplicates body with HTTP 400', async () => {
     const { baseUrl, close } = await startServer();
 
