@@ -2,6 +2,12 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.1 - 2026-06-07
+
+### Fixed
+
+- `findSymbol`: prefer exact-name matches. `getNavigateToItems` is fuzzy (substring/camelCase/prefix), so a query like `findSymbol("UserRepository")` previously returned ~100 unrelated same-prefix symbols (`userRepository`, `userSessionRepository`, …). It now returns only exact-name declarations, falling back to fuzzy matches only when there is no exact hit — so "go to symbol by name" is precise by default.
+
 ## 0.3.0 - 2026-06-07
 
 ### Added
