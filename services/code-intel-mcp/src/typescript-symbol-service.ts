@@ -857,7 +857,12 @@ export function findSymbolByName(workspaceRoot: string, symbol: string): FindSym
   const languageService = createLanguageService(workspaceRoot, seedFile);
   const navigateToItems = languageService.getNavigateToItems(symbol);
 
-  const matches: FindSymbolMatch[] = [];
+  // getNavigateToItems is fuzzy (substring/camelCase), so a query like "Foo" also pulls in
+  // "FooBar", "getFoo", etc. Split exact-name hits from fuzzy ones and prefer the exact set;
+  // fall back to fuzzy only when there is no exact match (so a partial query still returns
+  // something instead of nothing). This makes "find a symbol by name" precise by default.
+  const exactMatches: FindSymbolMatch[] = [];
+  const fuzzyMatches: FindSymbolMatch[] = [];
   for (const item of navigateToItems) {
     const sourceFile = languageService.getProgram()?.getSourceFile(item.fileName);
     if (!sourceFile) {
@@ -870,7 +875,7 @@ export function findSymbolByName(workspaceRoot: string, symbol: string): FindSym
     const start = toLineColumn(sourceFile, item.textSpan.start);
     const end = toLineColumn(sourceFile, item.textSpan.start + item.textSpan.length);
 
-    matches.push({
+    const match: FindSymbolMatch = {
       name: item.name,
       kind: navigateToKindToString(item.kind),
       filePath: relative(workspaceRoot, item.fileName).replaceAll('\\', '/'),
@@ -879,10 +884,16 @@ export function findSymbolByName(workspaceRoot: string, symbol: string): FindSym
       endLine: end.line,
       endColumn: end.column,
       ...(item.containerName ? { containerName: item.containerName } : {})
-    });
+    };
+
+    if (item.name === symbol) {
+      exactMatches.push(match);
+    } else {
+      fuzzyMatches.push(match);
+    }
   }
 
-  return { symbol, matches };
+  return { symbol, matches: exactMatches.length > 0 ? exactMatches : fuzzyMatches };
 }
 
 export function getFileOutline(

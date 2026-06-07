@@ -79,4 +79,17 @@ describe('findSymbolByName', () => {
     const result = findSymbolByName(fixtureRoot, 'definitelyNotARealSymbolName12345');
     expect(result.matches).toEqual([]);
   });
+
+  it('prefers exact-name matches over fuzzy prefix/substring matches', () => {
+    // `kiliWidget` is a strict prefix of `kiliWidgetFactory`; getNavigateToItems matches both.
+    const exact = findSymbolByName(fixtureRoot, 'kiliWidget');
+    expect(exact.matches.length).toBeGreaterThan(0);
+    expect(exact.matches.every((match) => match.name === 'kiliWidget')).toBe(true);
+    expect(exact.matches.some((match) => match.name === 'kiliWidgetFactory')).toBe(false);
+  });
+
+  it('falls back to fuzzy matches when there is no exact-name hit', () => {
+    const fuzzy = findSymbolByName(fixtureRoot, 'kiliWidgetFact');
+    expect(fuzzy.matches.some((match) => match.name === 'kiliWidgetFactory')).toBe(true);
+  });
 });
