@@ -12,6 +12,16 @@ It gives AI agents and IDE assistants fast access to symbol definitions, referen
 - An HTTP API for tools and health checks, plus MCP JSON-RPC for clients that speak MCP directly.
 - A self-hosted alternative to remote code indexing for teams that want data to stay local.
 
+## Benchmark: does it actually change agent behavior?
+
+On a large production TypeScript repository, with fresh-context agents free to choose any tool:
+
+- **100% spontaneous adoption (11/11).** Every agent reached for `code-intel` over Grep/Read when it was available — with no prompt forcing.
+- **Token savings that scale with task difficulty:** near-parity on simple grep-friendly lookups, **+13% to +34% (mean +27%) on debugging traces, large-file comprehension, and ambiguous-name searches** — the tasks that dominate real work.
+- **Type-checked precision:** semantic results carry no grep false positives (the grep-only baseline had to manually enumerate and exclude ambiguous-name matches).
+
+Full methodology and per-task numbers: [`docs/benchmarks/2026-06-07-agent-token-economy.md`](docs/benchmarks/2026-06-07-agent-token-economy.md).
+
 ## Good Use Cases
 
 - Refactoring a symbol safely across many files.
@@ -24,15 +34,23 @@ It gives AI agents and IDE assistants fast access to symbol definitions, referen
 
 ### Tools
 
-- `findDefinitions`
-- `findReferences`
-- `findImplementations`
-- `getFileOutline`
-- `getSymbolContent`
-- `dependencyGraph`
-- `searchStruct`
-- `searchText`
-- `findDuplicates`
+Semantic (type-aware — no native grep/read equivalent):
+
+- `findDefinitions` — go-to-definition for a symbol
+- `findReferences` — every real usage, resolved by the type-checker (no comment/string/same-name false positives)
+- `findImplementations` — implementations of an interface, abstract class, or port
+- `findSymbol` — find a symbol by name alone (no file path needed)
+- `findCallers` / `findCallees` — incoming / outgoing call hierarchy
+- `getSymbolContent` — the source of one symbol, not the whole file
+- `getFileOutline` — a file's structure without reading it
+- `dependencyGraph` — a file's import graph
+- `impactedFiles` — blast radius of a set of changed files
+
+Search & analysis:
+
+- `searchStruct` — AST-shaped structural search (`ast-grep`)
+- `searchText` — plain text / regex search (`ripgrep`)
+- `findDuplicates` — copy-paste / clone detection
 
 ### Protocols
 
@@ -190,7 +208,9 @@ Use when you want code duplication clusters and optional markdown reporting.
 
 ## Prompting Recommendations For AI Agents
 
-This package works best when the client prompt explicitly tells the model when to prefer semantic tools over raw text search.
+As of v0.3.0 the server **describes itself**: every tool ships a "use this instead of grep/read, and why" description, and the MCP `initialize` response returns an `instructions` block that routes symbol-level intents to the right tool. Clients that surface `instructions` (e.g. recent Claude Code) inject it into the model's context automatically — so **you usually need no prompt forcing at all**. The benchmark above measured 100% spontaneous adoption with zero consumer-side instructions.
+
+For clients that do **not** surface server `instructions`, a short system-prompt snippet still helps. Keep it minimal — long MCP instructions are easy for clients to truncate, and the per-tool descriptions already carry the detail.
 
 ### Minimal system prompt snippet
 
@@ -232,6 +252,13 @@ The package can be exposed either as:
 
 - a local stdio MCP server
 - a local HTTP server with `/mcp` and `/tools/*`
+
+### Configuration notes (all clients)
+
+- **`--workspaceRoot=.` is passed once at startup.** Do **not** pass `workspaceRoot` in individual tool calls — the startup value is applied automatically. (For VS Code, use `${workspaceFolder}`.)
+- **Deferred tools:** some clients load MCP tool schemas on demand. If the `mcp__code-intel__*` tools aren't visible yet, have the agent load them first (in Claude Code, via `ToolSearch`); the server's `initialize.instructions` also prompt their use.
+- **First call is slow, the rest are fast:** the first semantic call builds the TypeScript program (a few seconds on a large repo), then it's cached for the session.
+- **Reconnect after upgrading:** when you change the version or config, reconnect/restart the MCP server so the client reloads the tools and instructions.
 
 ### VS Code / GitHub Copilot
 
