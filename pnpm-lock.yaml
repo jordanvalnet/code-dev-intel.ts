@@ -48,6 +48,28 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@24.10.13)
+    optionalDependencies:
+      '@ast-grep/cli-darwin-arm64':
+        specifier: 0.40.5
+        version: 0.40.5
+      '@ast-grep/cli-darwin-x64':
+        specifier: 0.40.5
+        version: 0.40.5
+      '@ast-grep/cli-linux-arm64-gnu':
+        specifier: 0.40.5
+        version: 0.40.5
+      '@ast-grep/cli-linux-x64-gnu':
+        specifier: 0.40.5
+        version: 0.40.5
+      '@ast-grep/cli-win32-arm64-msvc':
+        specifier: 0.40.5
+        version: 0.40.5
+      '@ast-grep/cli-win32-ia32-msvc':
+        specifier: 0.40.5
+        version: 0.40.5
+      '@ast-grep/cli-win32-x64-msvc':
+        specifier: 0.40.5
+        version: 0.40.5
 
 packages:
 

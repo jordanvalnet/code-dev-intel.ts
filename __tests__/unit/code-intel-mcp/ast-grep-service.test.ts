@@ -2,14 +2,18 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   resetAstGrepPostinstallRunnerForTests,
   resetAstGrepRunnerForTests,
+  resetBundledAstGrepPathCacheForTests,
   searchStructWithAstGrep,
   setAstGrepPostinstallRunnerForTests,
-  setAstGrepRunnerForTests
+  setAstGrepRunnerForTests,
+  setBundledAstGrepPathForTests
 } from '../../../services/code-intel-mcp/src/ast-grep-service.ts';
 
 afterEach(() => {
   resetAstGrepRunnerForTests();
   resetAstGrepPostinstallRunnerForTests();
+  resetBundledAstGrepPathCacheForTests();
+  delete process.env.CODE_INTEL_ASTGREP_PATH;
 });
 
 function expectCommandIncludes(args: string[], expectedFragment: string): void {
@@ -91,6 +95,7 @@ describe('ast-grep-service', () => {
   });
 
   it('falls back to pnpm dlx when local ast-grep shim is unavailable', () => {
+    setBundledAstGrepPathForTests(null);
     let invocation = 0;
 
     setAstGrepPostinstallRunnerForTests(() => ({
@@ -145,6 +150,7 @@ describe('ast-grep-service', () => {
   });
 
   it('repairs ast-grep link via postinstall before dlx fallback', () => {
+    setBundledAstGrepPathForTests(null);
     let invocation = 0;
     let postinstallInvoked = false;
 
@@ -202,16 +208,24 @@ describe('ast-grep-service', () => {
     expect(invocation).toBe(3);
   });
 
-  it('returns actionable error when ast-grep shim is not linked', () => {
+  it('degrades to an empty result with engineFallbackReason when ast-grep is unavailable', () => {
+    setBundledAstGrepPathForTests(null);
     setAstGrepRunnerForTests(() => ({
       status: 2,
       stdout: 'ast-grep shim file was executed',
       stderr: ''
     }));
+    setAstGrepPostinstallRunnerForTests(() => ({
+      status: 1,
+      stdout: '',
+      stderr: 'postinstall failed'
+    }));
 
-    expect(() => searchStructWithAstGrep('E:/workspace', 'foo($A)', 'ts')).toThrow(
-      'ast-grep binary is not linked'
-    );
+    const result = searchStructWithAstGrep('E:/workspace', 'foo($A)', 'ts');
+
+    expect(result.matches).toEqual([]);
+    expect(result.engineFallbackReason).toBeDefined();
+    expect(result.engineFallbackReason).toContain('not linked');
   });
 
   it('returns actionable error when ast-grep times out', () => {
@@ -225,5 +239,60 @@ describe('ast-grep-service', () => {
     expect(() => searchStructWithAstGrep('E:/workspace', 'foo($A)', 'ts')).toThrow(
       'ast-grep timed out'
     );
+  });
+
+  describe('bundled binary hardening', () => {
+    it('uses CODE_INTEL_ASTGREP_PATH override as the first invocation when it exists', () => {
+      // Point the override at any existing file (node executable) so existsSync passes.
+      process.env.CODE_INTEL_ASTGREP_PATH = process.execPath;
+      resetBundledAstGrepPathCacheForTests();
+
+      let firstCommand = '';
+      let invocation = 0;
+      setAstGrepRunnerForTests((command, args) => {
+        invocation += 1;
+        if (invocation === 1) {
+          firstCommand = command;
+          expect(args[0]).toBe('run');
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              file: 'src/file.ts',
+              text: 'foo(name)',
+              range: { start: { line: 0, column: 0 }, end: { line: 0, column: 8 } }
+            }),
+            stderr: ''
+          };
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      });
+
+      const result = searchStructWithAstGrep('E:/workspace', 'foo($A)', 'ts');
+
+      expect(firstCommand).toBe(process.execPath);
+      expect(result.matches.length).toBe(1);
+      expect(invocation).toBe(1);
+    });
+
+    it('degrades to empty result with engineFallbackReason when the binary is missing (ENOENT)', () => {
+      setBundledAstGrepPathForTests(null);
+      setAstGrepRunnerForTests(() => ({
+        status: null,
+        stdout: '',
+        stderr: 'spawn ast-grep ENOENT',
+        error: new Error('spawn ast-grep ENOENT')
+      }));
+      setAstGrepPostinstallRunnerForTests(() => ({
+        status: 1,
+        stdout: '',
+        stderr: 'postinstall failed'
+      }));
+
+      const result = searchStructWithAstGrep('E:/workspace', 'foo($A)', 'ts');
+
+      expect(result.matches).toEqual([]);
+      expect(result.engineFallbackReason).toBeDefined();
+      expect(result.engineFallbackReason).toContain('not found');
+    });
   });
 });

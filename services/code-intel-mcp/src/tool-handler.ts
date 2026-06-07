@@ -1,7 +1,10 @@
 import {
   type DependencyGraphResult,
+  type FindCalleesResult,
+  type FindCallersResult,
   FindDuplicatesRequestSchema,
   type FindDuplicatesResult,
+  type FindSymbolResult,
   type FileOutlineResult,
   ToolRequestBodySchema,
   type StructSearchResult,
@@ -13,7 +16,10 @@ import {
   type ToolResponse
 } from './contracts.ts';
 import {
+  findCalleesBySymbol,
+  findCallersBySymbol,
   findDefinitionsBySymbol,
+  findSymbolByName,
   getDependencyGraph,
   findImplementationsBySymbol,
   findReferencesBySymbol,
@@ -23,6 +29,7 @@ import {
 import { searchStructWithAstGrep } from './ast-grep-service.ts';
 import { searchTextWithRipgrep } from './search-text-service.ts';
 import { findDuplicates } from './duplicate-detection-service.ts';
+import { calculateWorkspaceImpactedFiles } from '../../indexer/src/impacted-files-engine.ts';
 import { HttpError, resolveAndValidateWorkspaceRoot } from './server-utils.ts';
 
 function createMockPayload(tool: ToolName, request: ToolRequest): ToolResponse {
@@ -236,6 +243,93 @@ function createDependencyGraphPayload(request: ToolRequest): ToolResponse {
   };
 }
 
+function createCallHierarchyPayload(
+  tool: 'findCallers' | 'findCallees',
+  request: ToolRequest
+): ToolResponse<FindCallersResult> | ToolResponse<FindCalleesResult> {
+  if (!request.filePath || !request.symbol) {
+    if (tool === 'findCallers') {
+      return {
+        ok: false,
+        tool,
+        data: { symbol: request.symbol ?? '', sourceFilePath: request.filePath ?? '', callers: [] },
+        error: 'filePath and symbol are required for findCallers'
+      };
+    }
+    return {
+      ok: false,
+      tool,
+      data: { symbol: request.symbol ?? '', sourceFilePath: request.filePath ?? '', callees: [] },
+      error: 'filePath and symbol are required for findCallees'
+    };
+  }
+
+  if (tool === 'findCallers') {
+    return {
+      ok: true,
+      tool,
+      data: findCallersBySymbol(request.workspaceRoot, request.filePath, request.symbol)
+    };
+  }
+
+  return {
+    ok: true,
+    tool,
+    data: findCalleesBySymbol(request.workspaceRoot, request.filePath, request.symbol)
+  };
+}
+
+function createFindSymbolPayload(request: ToolRequest): ToolResponse<FindSymbolResult> {
+  if (!request.symbol) {
+    return {
+      ok: false,
+      tool: 'findSymbol',
+      data: { symbol: '', matches: [] },
+      error: 'symbol is required for findSymbol'
+    };
+  }
+
+  return {
+    ok: true,
+    tool: 'findSymbol',
+    data: findSymbolByName(request.workspaceRoot, request.symbol)
+  };
+}
+
+function createImpactedFilesPayload(request: ToolRequest): ToolResponse {
+  const changedFilesOption = request.options?.changedFiles;
+  const changedFiles = Array.isArray(changedFilesOption)
+    ? changedFilesOption.filter((item): item is string => typeof item === 'string')
+    : [];
+
+  if (changedFiles.length === 0) {
+    return {
+      ok: false,
+      tool: 'impactedFiles',
+      data: { impactedFiles: [], count: 0 },
+      error: 'options.changedFiles (non-empty array of repo-relative paths) is required for impactedFiles'
+    };
+  }
+
+  const changedSymbolsOption = request.options?.changedSymbolsByFile;
+  const changedSymbolsByFile =
+    changedSymbolsOption && typeof changedSymbolsOption === 'object' && !Array.isArray(changedSymbolsOption)
+      ? (changedSymbolsOption as Record<string, string[]>)
+      : undefined;
+
+  const impacted = calculateWorkspaceImpactedFiles({
+    workspaceRoot: request.workspaceRoot,
+    changedFiles,
+    changedSymbolsByFile
+  });
+
+  return {
+    ok: true,
+    tool: 'impactedFiles',
+    data: { impactedFiles: impacted, count: impacted.length }
+  };
+}
+
 export async function createFindDuplicatesPayload(
   body: unknown,
   defaultWorkspaceRoot?: string
@@ -274,9 +368,20 @@ export function createToolPayload(
   | ToolResponse<SymbolQueryResult>
   | ToolResponse<StructSearchResult>
   | ToolResponse<TextSearchResult>
-  | ToolResponse<DependencyGraphResult> {
+  | ToolResponse<DependencyGraphResult>
+  | ToolResponse<FindCallersResult>
+  | ToolResponse<FindCalleesResult>
+  | ToolResponse<FindSymbolResult> {
   if (tool === 'findDefinitions' || tool === 'findReferences' || tool === 'findImplementations') {
     return createSymbolResolutionPayload(tool, request);
+  }
+
+  if (tool === 'findCallers' || tool === 'findCallees') {
+    return createCallHierarchyPayload(tool, request);
+  }
+
+  if (tool === 'findSymbol') {
+    return createFindSymbolPayload(request);
   }
 
   if (tool === 'getFileOutline') {
@@ -297,6 +402,10 @@ export function createToolPayload(
 
   if (tool === 'searchText') {
     return createTextPayload(request);
+  }
+
+  if (tool === 'impactedFiles') {
+    return createImpactedFilesPayload(request);
   }
 
   return createMockPayload(tool, request);

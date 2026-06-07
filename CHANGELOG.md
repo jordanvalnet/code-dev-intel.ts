@@ -2,6 +2,21 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.0 - 2026-06-07
+
+### Added
+
+- **Adoption redesign**: tool descriptions rewritten to state, for each tool, *when* to use it, *instead of which* built-in (Grep/Read), and the token/precision benefit — so an agent has a concrete reason to prefer code-intel over reflexive Grep/Glob/Read. The persuasion now ships *with the server*; consumers need no `AGENTS.md` forcing.
+- **MCP `initialize.instructions`**: the server now returns a usage guide routing symbol-level intents to the right tool. Clients that surface it inject it into the model's context automatically.
+- `findCallers` / `findCallees`: real incoming/outgoing **call hierarchy** via the TS language service (were mock).
+- `findSymbol`: **workspace symbol search by name alone** (no `filePath` needed) via `getNavigateToItems` — removes the "must know the file first" friction (was mock).
+- `impactedFiles`: real transitive **blast-radius** analysis wired to the indexer engine (was mock).
+
+### Fixed
+
+- `searchStruct`: resolves the bundled `ast-grep` binary directly from `optionalDependencies` (or `CODE_INTEL_ASTGREP_PATH`), and degrades to an empty result with `engineFallbackReason` instead of throwing when the binary is unavailable. Previously it required `pnpm`/network at runtime and hard-failed in many consumer installs.
+- The server now advertises **only tools that work** — the four formerly-mock endpoints are real, so an agent no longer loses trust in the whole server after one mock response.
+
 ## 0.2.0 - 2026-05-09
 
 ### Fixed

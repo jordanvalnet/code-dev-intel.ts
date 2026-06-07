@@ -2,10 +2,17 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 import type {
+  CalleeEntry,
+  CallerEntry,
+  CallSite,
   DependencyEdge,
   DependencyGraphResult,
   FileOutlineItem,
   FileOutlineResult,
+  FindCalleesResult,
+  FindCallersResult,
+  FindSymbolMatch,
+  FindSymbolResult,
   SymbolContentResult,
   SymbolLocation,
   SymbolQueryResult
@@ -726,6 +733,156 @@ export function findImplementationsBySymbol(
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
     locations: applyResolutionFilters(rawLocations, options)
   };
+}
+
+function toCallSite(sourceFile: ts.SourceFile, textSpan: ts.TextSpan): CallSite {
+  const start = sourceFile.getLineAndCharacterOfPosition(textSpan.start);
+  const end = sourceFile.getLineAndCharacterOfPosition(textSpan.start + textSpan.length);
+  return {
+    startLine: start.line + 1,
+    startColumn: start.character + 1,
+    endLine: end.line + 1,
+    endColumn: end.character + 1
+  };
+}
+
+function resolveCallHierarchyItem(
+  languageService: ts.LanguageService,
+  resolvedFilePath: string,
+  offset: number
+): ts.CallHierarchyItem | undefined {
+  const item = languageService.prepareCallHierarchy(resolvedFilePath, offset);
+  if (!item) {
+    return undefined;
+  }
+  return Array.isArray(item) ? item[0] : item;
+}
+
+export function findCallersBySymbol(
+  workspaceRoot: string,
+  filePath: string,
+  symbol: string
+): FindCallersResult {
+  const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
+  const languageService = createLanguageService(workspaceRoot, resolvedFilePath);
+  const program = languageService.getProgram();
+  const requestSourceFile = program?.getSourceFile(resolvedFilePath);
+  if (!requestSourceFile) {
+    throw new Error(`unable to read source file: ${resolvedFilePath}`);
+  }
+  const offset = resolveSymbolAnchorOffset(requestSourceFile, symbol);
+
+  const sourceFilePath = relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/');
+  const hierarchyItem = resolveCallHierarchyItem(languageService, resolvedFilePath, offset);
+  if (!hierarchyItem) {
+    return { symbol, sourceFilePath, callers: [] };
+  }
+
+  const incomingCalls = languageService.provideCallHierarchyIncomingCalls(
+    hierarchyItem.file,
+    hierarchyItem.selectionSpan.start
+  );
+
+  const callers: CallerEntry[] = [];
+  for (const incoming of incomingCalls) {
+    const callerSourceFile = languageService.getProgram()?.getSourceFile(incoming.from.file);
+    if (!callerSourceFile) {
+      continue;
+    }
+    const callerFilePath = relative(workspaceRoot, incoming.from.file).replaceAll('\\', '/');
+    for (const fromSpan of incoming.fromSpans) {
+      callers.push({
+        callerSymbol: incoming.from.name,
+        filePath: callerFilePath,
+        callSite: toCallSite(callerSourceFile, fromSpan)
+      });
+    }
+  }
+
+  return { symbol, sourceFilePath, callers };
+}
+
+export function findCalleesBySymbol(
+  workspaceRoot: string,
+  filePath: string,
+  symbol: string
+): FindCalleesResult {
+  const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
+  const languageService = createLanguageService(workspaceRoot, resolvedFilePath);
+  const program = languageService.getProgram();
+  const requestSourceFile = program?.getSourceFile(resolvedFilePath);
+  if (!requestSourceFile) {
+    throw new Error(`unable to read source file: ${resolvedFilePath}`);
+  }
+  const offset = resolveSymbolAnchorOffset(requestSourceFile, symbol);
+
+  const sourceFilePath = relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/');
+  const hierarchyItem = resolveCallHierarchyItem(languageService, resolvedFilePath, offset);
+  if (!hierarchyItem) {
+    return { symbol, sourceFilePath, callees: [] };
+  }
+
+  const outgoingCalls = languageService.provideCallHierarchyOutgoingCalls(
+    hierarchyItem.file,
+    hierarchyItem.selectionSpan.start
+  );
+
+  const callees: CalleeEntry[] = [];
+  for (const outgoing of outgoingCalls) {
+    const calleeFilePath = relative(workspaceRoot, outgoing.to.file).replaceAll('\\', '/');
+    // fromSpans are the call-site spans inside the anchored source file.
+    for (const fromSpan of outgoing.fromSpans) {
+      callees.push({
+        calleeSymbol: outgoing.to.name,
+        filePath: calleeFilePath,
+        callSite: toCallSite(requestSourceFile, fromSpan)
+      });
+    }
+  }
+
+  return { symbol, sourceFilePath, callees };
+}
+
+function navigateToKindToString(kind: string): string {
+  return typeof kind === 'string' && kind.length > 0 ? kind : 'unknown';
+}
+
+export function findSymbolByName(workspaceRoot: string, symbol: string): FindSymbolResult {
+  const context = resolveProjectContext(workspaceRoot);
+  const seedFile = context.projectFiles.find((file) => SUPPORTED_EXTENSIONS.has(extname(file).toLowerCase()));
+  if (!seedFile) {
+    return { symbol, matches: [] };
+  }
+
+  const languageService = createLanguageService(workspaceRoot, seedFile);
+  const navigateToItems = languageService.getNavigateToItems(symbol);
+
+  const matches: FindSymbolMatch[] = [];
+  for (const item of navigateToItems) {
+    const sourceFile = languageService.getProgram()?.getSourceFile(item.fileName);
+    if (!sourceFile) {
+      continue;
+    }
+    if (isWithinNodeModules(item.fileName) || isAmbientDeclarationFile(item.fileName)) {
+      continue;
+    }
+
+    const start = toLineColumn(sourceFile, item.textSpan.start);
+    const end = toLineColumn(sourceFile, item.textSpan.start + item.textSpan.length);
+
+    matches.push({
+      name: item.name,
+      kind: navigateToKindToString(item.kind),
+      filePath: relative(workspaceRoot, item.fileName).replaceAll('\\', '/'),
+      startLine: start.line,
+      startColumn: start.column,
+      endLine: end.line,
+      endColumn: end.column,
+      ...(item.containerName ? { containerName: item.containerName } : {})
+    });
+  }
+
+  return { symbol, matches };
 }
 
 export function getFileOutline(
