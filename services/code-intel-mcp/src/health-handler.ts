@@ -42,7 +42,7 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'findDefinitions',
       endpoint: '/tools/findDefinitions',
       description:
-        "Go-to-definition for a TS/JS symbol — the exact declaration site(s) (file:line), type-checker resolved across re-exports and aliases. Use for 'where is X defined / declared' instead of grepping the name then Reading files; one call replaces a grep plus several Reads.",
+        "Go-to-definition for a TS/JS symbol — the exact declaration site(s), type-checker resolved across re-exports and aliases. Use for 'where is X defined / declared' instead of grepping the name then Reading files; one call replaces a grep plus several Reads. Returns `{ count, byFile: { \"<path>\": [\"line:col\", ...] } }`.",
       requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol'],
       options: RESOLUTION_OPTIONS
     },
@@ -50,7 +50,7 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'findReferences',
       endpoint: '/tools/findReferences',
       description:
-        "Every real usage of a TS/JS symbol (function/class/variable/type) across the repo, resolved by the type-checker — no false hits in comments, strings, or unrelated same-named symbols. Use for 'where is X used / all usages / all call sites' instead of Grep: returns a short file:line list, not grep noise, and you skip opening whole files.",
+        "Every real usage of a TS/JS symbol (function/class/variable/type) across the repo, resolved by the type-checker — no false hits in comments, strings, or unrelated same-named symbols. Use for 'where is X used / all usages / all call sites' instead of Grep: not grep noise, and you skip opening whole files. Returns `{ count, byFile: { \"<path>\": [\"line:col\", ...] } }` — positions grouped by file, compact.",
       requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol'],
       options: RESOLUTION_OPTIONS
     },
@@ -58,7 +58,7 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'findImplementations',
       endpoint: '/tools/findImplementations',
       description:
-        "All implementations of an interface, abstract class, or port/type — type-aware. Use for 'who implements this interface/port' instead of guessing with Grep on the name; returns the concrete implementation sites directly.",
+        "All implementations of an interface, abstract class, or port/type — type-aware. Use for 'who implements this interface/port' instead of guessing with Grep on the name; returns the concrete implementation sites directly as `{ count, byFile: { \"<path>\": [\"line:col\", ...] } }`.",
       requiredRequestFields: ['workspaceRoot', 'filePath', 'symbol'],
       options: RESOLUTION_OPTIONS
     },
