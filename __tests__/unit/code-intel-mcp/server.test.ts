@@ -507,19 +507,19 @@ describe('mcp skeleton server', () => {
 
     const definitionJson = (await definitionResponse.json()) as {
       ok: boolean;
-      data: { locations: Array<{ filePath: string }> };
+      data: { count: number; byFile: Record<string, string[]> };
     };
     const refsJson = (await refsResponse.json()) as {
       ok: boolean;
-      data: { locations: Array<{ filePath: string }> };
+      data: { count: number; byFile: Record<string, string[]> };
     };
 
     expect(definitionResponse.status).toBe(200);
     expect(refsResponse.status).toBe(200);
     expect(definitionJson.ok).toBe(true);
-    expect(definitionJson.data.locations[0]?.filePath).toBe('src/definitions.ts');
+    expect(Object.keys(definitionJson.data.byFile)).toContain('src/definitions.ts');
 
-    const refFiles = new Set(refsJson.data.locations.map((entry) => entry.filePath));
+    const refFiles = new Set(Object.keys(refsJson.data.byFile));
     expect(refFiles.has('src/usage.ts')).toBe(true);
     expect(refFiles.has('src/definitions.ts')).toBe(true);
 
@@ -542,13 +542,13 @@ describe('mcp skeleton server', () => {
 
     const refsJson = (await refsResponse.json()) as {
       ok: boolean;
-      data: { locations: Array<{ filePath: string }> };
+      data: { count: number; byFile: Record<string, string[]> };
     };
 
     expect(refsResponse.status).toBe(200);
     expect(refsJson.ok).toBe(true);
 
-    const refFiles = new Set(refsJson.data.locations.map((entry) => entry.filePath));
+    const refFiles = new Set(Object.keys(refsJson.data.byFile));
     expect(refFiles.has('src/usage.ts')).toBe(true);
     expect(refFiles.has('src/definitions.ts')).toBe(true);
 
@@ -747,13 +747,13 @@ describe('mcp skeleton server', () => {
 
     const json = (await response.json()) as {
       ok: boolean;
-      data: { locations: Array<{ filePath: string }> };
+      data: { count: number; byFile: Record<string, string[]> };
     };
 
     expect(response.status).toBe(200);
     expect(json.ok).toBe(true);
 
-    const filePaths = new Set(json.data.locations.map((entry) => entry.filePath));
+    const filePaths = new Set(Object.keys(json.data.byFile));
     expect(filePaths.has('src/greeting-implementation.ts')).toBe(true);
 
     await close();

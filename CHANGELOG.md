@@ -2,6 +2,14 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.3 - 2026-06-08
+
+### Changed
+
+- **Compact output for `findReferences` / `findDefinitions` / `findImplementations`** (breaking shape change). These three tools now return matches grouped by file instead of a flat `locations` array:
+  `{ symbol, sourceFilePath, count, byFile: { "<path>": ["line:col", ...] } }`.
+  The path is written once per file (not once per occurrence) and each position is the universal 1-based `"line:col"` string. On a 43-reference symbol the payload dropped **~72%** (5,793 → 1,634 chars) and is now **~60% smaller than the equivalent `grep -n`** — flipping find-references from a token loss to a clear win. The column is always present, so single-line / minified files stay unambiguous. Only consumers that read the old `.locations` array are affected; `findSymbol` / `findCallers` / `findCallees` are unchanged.
+
 ## 0.3.2 - 2026-06-08
 
 ### Docs

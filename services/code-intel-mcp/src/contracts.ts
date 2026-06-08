@@ -87,7 +87,10 @@ export interface SymbolLocation {
 export interface SymbolQueryResult {
   symbol: string;
   sourceFilePath: string;
-  locations: SymbolLocation[];
+  /** Total number of matches across all files. */
+  count: number;
+  /** Matches grouped by file to avoid repeating the path. Each value is a list of `"line:col"` positions (1-based), e.g. `{ "src/a.ts": ["26:5", "88:5"] }`. The column is always present, so single-line / minified files are unambiguous. */
+  byFile: Record<string, string[]>;
 }
 
 export interface CallSite {

@@ -15,14 +15,14 @@ describe('typescript-symbol-service', () => {
   it('finds definition across files', () => {
     const result = findDefinitionsBySymbol(fixtureRoot, 'src/usage.ts', 'buildGreeting');
 
-    expect(result.locations.length).toBeGreaterThan(0);
-    expect(result.locations[0]?.filePath).toBe('src/definitions.ts');
+    expect(result.count).toBeGreaterThan(0);
+    expect(Object.keys(result.byFile)).toContain('src/definitions.ts');
   });
 
   it('finds references in usage and definition files', () => {
     const result = findReferencesBySymbol(fixtureRoot, 'src/usage.ts', 'buildGreeting');
 
-    const filePaths = new Set(result.locations.map((entry) => entry.filePath));
+    const filePaths = new Set(Object.keys(result.byFile));
     expect(filePaths.has('src/usage.ts')).toBe(true);
     expect(filePaths.has('src/definitions.ts')).toBe(true);
   });
@@ -30,7 +30,7 @@ describe('typescript-symbol-service', () => {
   it('finds class implementations of an interface symbol', () => {
     const result = findImplementationsBySymbol(fixtureRoot, 'src/contract.ts', 'GreetingContract');
 
-    const filePaths = new Set(result.locations.map((entry) => entry.filePath));
+    const filePaths = new Set(Object.keys(result.byFile));
     expect(filePaths.has('src/greeting-implementation.ts')).toBe(true);
   });
 
@@ -74,26 +74,25 @@ describe('typescript-symbol-service', () => {
     it('findDefinitions anchors on the declaration even when the symbol first appears in a comment', () => {
       const result = findDefinitionsBySymbol(fixtureRoot, 'src/symbol-anchor.ts', 'targetSymbol');
 
-      expect(result.locations.length).toBeGreaterThan(0);
-      const declarationLocation = result.locations.find(
-        (location) => location.filePath === 'src/symbol-anchor.ts'
-      );
-      expect(declarationLocation).toBeDefined();
-      expect(declarationLocation?.startLine).toBeGreaterThanOrEqual(10);
+      expect(result.count).toBeGreaterThan(0);
+      const positions = result.byFile['src/symbol-anchor.ts'];
+      expect(positions).toBeDefined();
+      const declarationLine = Number(positions?.[0]?.split(':')[0]);
+      expect(declarationLine).toBeGreaterThanOrEqual(10);
     });
 
     it('findReferences includes the local declaration and the cross-file consumer', () => {
       const result = findReferencesBySymbol(fixtureRoot, 'src/symbol-anchor.ts', 'targetSymbol');
-      const filePaths = new Set(result.locations.map((entry) => entry.filePath));
+      const filePaths = new Set(Object.keys(result.byFile));
       expect(filePaths.has('src/symbol-anchor.ts')).toBe(true);
       expect(filePaths.has('src/symbol-anchor-usage.ts')).toBe(true);
     });
 
     it('findReferences excludes node_modules and *.d.ts results by default', () => {
       const result = findReferencesBySymbol(fixtureRoot, 'src/symbol-anchor.ts', 'targetSymbol');
-      for (const location of result.locations) {
-        expect(location.filePath.includes('node_modules')).toBe(false);
-        expect(location.filePath.endsWith('.d.ts')).toBe(false);
+      for (const filePath of Object.keys(result.byFile)) {
+        expect(filePath.includes('node_modules')).toBe(false);
+        expect(filePath.endsWith('.d.ts')).toBe(false);
       }
     });
 

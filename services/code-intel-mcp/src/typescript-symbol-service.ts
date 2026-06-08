@@ -629,6 +629,22 @@ function applyResolutionFilters(
   });
 }
 
+// Compact, AI-friendly output: group matches by file (the path is the heavy part, so it is
+// written once per file, not once per occurrence) and render each position as the universal
+// "line:col" string (1-based). Keeping the column means single-line/minified files stay
+// unambiguous without any special-casing.
+function groupSymbolLocations(locations: SymbolLocation[]): {
+  count: number;
+  byFile: Record<string, string[]>;
+} {
+  const byFile: Record<string, string[]> = {};
+  for (const location of locations) {
+    const positions = byFile[location.filePath] ?? (byFile[location.filePath] = []);
+    positions.push(`${location.startLine}:${location.startColumn}`);
+  }
+  return { count: locations.length, byFile };
+}
+
 export function findDefinitionsBySymbol(
   workspaceRoot: string,
   filePath: string,
@@ -660,7 +676,7 @@ export function findDefinitionsBySymbol(
   return {
     symbol,
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
-    locations: applyResolutionFilters(rawLocations, options)
+    ...groupSymbolLocations(applyResolutionFilters(rawLocations, options))
   };
 }
 
@@ -695,7 +711,7 @@ export function findReferencesBySymbol(
   return {
     symbol,
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
-    locations: applyResolutionFilters(rawLocations, options)
+    ...groupSymbolLocations(applyResolutionFilters(rawLocations, options))
   };
 }
 
@@ -731,7 +747,7 @@ export function findImplementationsBySymbol(
   return {
     symbol,
     sourceFilePath: relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/'),
-    locations: applyResolutionFilters(rawLocations, options)
+    ...groupSymbolLocations(applyResolutionFilters(rawLocations, options))
   };
 }
 
