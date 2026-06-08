@@ -2,6 +2,13 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.5 - 2026-06-08
+
+### Docs
+
+- Clarified the benchmark wording so the gains read unambiguously: token results are now "X% fewer tokens" / "~parity" (no more "+X%" that read like an *increase*), and adoption is stated as "11 of 11 fresh-context agents chose it on their own, on real production-codebase tasks".
+- README now links to the benchmark write-up via a full GitHub URL — relative repo paths don't resolve on the npm page (npm renders only the README).
+
 ## 0.3.4 - 2026-06-08
 
 ### Docs

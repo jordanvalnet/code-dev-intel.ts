@@ -4,8 +4,8 @@ Does giving a coding agent `code-intel` actually change its behavior, and does i
 
 ## TL;DR
 
-- **Spontaneous adoption: 100% (11/11).** When `code-intel` was available alongside Grep/Glob/Read and the agent was free to choose, **every** agent reached for it unprompted, across 7 different task types.
-- **Token savings scale with task difficulty.** Near-parity on simple grep-friendly lookups; **+13% to +34% (mean +27%) on debugging traces, large-file comprehension, and ambiguous-name searches** — the tasks that dominate real work.
+- **Spontaneous adoption: 11 of 11 agents.** With `code-intel` available alongside Grep/Glob/Read and each agent free to choose, **all 11 fresh-context agents chose it on their own — with no instruction to use it** — across 7 real task types on a production codebase.
+- **Fewer tokens, scaling with task difficulty.** Roughly parity on simple grep-friendly lookups; **13–34% fewer tokens (≈27% fewer on average) on debugging traces, large-file comprehension, and ambiguous-name searches** — the tasks that dominate real work.
 - **Type-checked precision.** `findReferences`/`findImplementations` results are resolved by the type-checker, so they carry no grep false positives. On an ambiguous-name task the grep-only baseline had to *manually* enumerate and exclude false matches.
 
 > **Update (v0.3.3):** the benchmark below ran on v0.3.0. In v0.3.3 the `findReferences`/`findDefinitions`/`findImplementations` output was made compact (grouped by file, `"line:col"` positions) — on a 43-reference symbol the payload dropped ~72% (5,793 → 1,634 chars) and is now ~60% smaller than `grep -n`. This directly improves the one area where semantic find-references was previously *more* verbose than grep.
@@ -23,7 +23,7 @@ Token figures are end-to-end **agent** tokens, not per-tool output sizes. (The p
 
 ## Results — adoption
 
-**11 / 11 treatment agents used `code-intel` spontaneously (100%).** The tools they reached for, by task:
+**All 11 of the 11 treatment agents chose `code-intel` on their own** (no instruction to use it), on real tasks against the production codebase. The tools they reached for, by task:
 
 | Task type | Tools the agent chose |
 |---|---|
@@ -39,23 +39,23 @@ Token figures are end-to-end **agent** tokens, not per-tool output sizes. (The p
 
 ### Batch 1 — ordinary, grep-friendly navigation
 
-| Task | code-intel (tokens) | Grep/Read (tokens) | Δ |
+| Task | code-intel (tokens) | Grep/Read (tokens) | code-intel result |
 |---|--:|--:|--:|
-| Trace a 3-layer call chain | 35,562 | 35,318 | −0.7% |
-| Port implementers + consumers | 39,798 | 37,920 | −5.0% |
-| Explain one use-case + its deps | 34,837 | 33,697 | −3.4% |
-| List a 1,177-line class's structure | 30,657 | **46,221** | **+33.7%** |
+| Trace a 3-layer call chain | 35,562 | 35,318 | ~parity (0.7% more) |
+| Port implementers + consumers | 39,798 | 37,920 | ~parity (5% more) |
+| Explain one use-case + its deps | 34,837 | 33,697 | ~parity (3% more) |
+| List a 1,177-line class's structure | 30,657 | **46,221** | **34% fewer tokens** |
 
 On simple lookups where the symbol name is distinctive, an efficient grep agent is already cheap, so code-intel is roughly at parity — **except** when the task forces reading a whole large file (the structure task), where outline-instead-of-read is a clear win.
 
 ### Batch 2 — hard: debugging / read-heavy / grep-hostile
 
-| Task | code-intel (tokens) | Grep/Read (tokens) | Δ |
+| Task | code-intel (tokens) | Grep/Read (tokens) | code-intel result |
 |---|--:|--:|--:|
-| Debug: trace a field's full lifecycle | 63,579 | 95,657 | **+33.5%** |
-| Map a 3-file (~1,900-line) subsystem | 43,421 | 63,883 | **+32.0%** |
-| Blast radius of an ambiguous common type | 54,515 | 62,535 | **+12.8%** |
-| **Mean** | **53,838** | **74,025** | **+27.3%** |
+| Debug: trace a field's full lifecycle | 63,579 | 95,657 | **34% fewer tokens** |
+| Map a 3-file (~1,900-line) subsystem | 43,421 | 63,883 | **32% fewer tokens** |
+| Blast radius of an ambiguous common type | 54,515 | 62,535 | **13% fewer tokens** |
+| **Mean** | **53,838** | **74,025** | **27% fewer tokens** |
 
 The harder the task, the more the grep baseline pays — it reads 12–14 files (the debugging task cost the control 95.7k tokens) where the semantic agent jumps to the relevant declarations.
 
