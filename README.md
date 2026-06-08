@@ -19,6 +19,7 @@ On a large production TypeScript repository, with fresh-context agents free to c
 - **100% spontaneous adoption (11/11).** Every agent reached for `code-intel` over Grep/Read when it was available — with no prompt forcing.
 - **Token savings that scale with task difficulty:** near-parity on simple grep-friendly lookups, **+13% to +34% (mean +27%) on debugging traces, large-file comprehension, and ambiguous-name searches** — the tasks that dominate real work.
 - **Type-checked precision:** semantic results carry no grep false positives (the grep-only baseline had to manually enumerate and exclude ambiguous-name matches).
+- **Compact, grep-beating output:** `findReferences`/`findDefinitions`/`findImplementations` group matches by file as `"line:col"` positions. On a 43-reference symbol that's **~72% smaller than the old format and ~60% smaller than `grep -n`** — so even raw text search no longer wins on tokens.
 
 Full methodology and per-task numbers: [`docs/benchmarks/2026-06-07-agent-token-economy.md`](docs/benchmarks/2026-06-07-agent-token-economy.md).
 

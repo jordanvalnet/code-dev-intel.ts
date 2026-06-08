@@ -2,6 +2,12 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.4 - 2026-06-08
+
+### Docs
+
+- README benchmark section now also shows the compact-output result (`findReferences` ~72% smaller than the old format, ~60% smaller than `grep -n`), so every measured gain — adoption, token savings, type-checked precision, and compact output — is visible on the npm page.
+
 ## 0.3.3 - 2026-06-08
 
 ### Changed
