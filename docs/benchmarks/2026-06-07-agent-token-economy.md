@@ -8,6 +8,8 @@ Does giving a coding agent `code-intel` actually change its behavior, and does i
 - **Token savings scale with task difficulty.** Near-parity on simple grep-friendly lookups; **+13% to +34% (mean +27%) on debugging traces, large-file comprehension, and ambiguous-name searches** — the tasks that dominate real work.
 - **Type-checked precision.** `findReferences`/`findImplementations` results are resolved by the type-checker, so they carry no grep false positives. On an ambiguous-name task the grep-only baseline had to *manually* enumerate and exclude false matches.
 
+> **Update (v0.3.3):** the benchmark below ran on v0.3.0. In v0.3.3 the `findReferences`/`findDefinitions`/`findImplementations` output was made compact (grouped by file, `"line:col"` positions) — on a 43-reference symbol the payload dropped ~72% (5,793 → 1,634 chars) and is now ~60% smaller than `grep -n`. This directly improves the one area where semantic find-references was previously *more* verbose than grep.
+
 ## Method
 
 - **Agents:** fresh-context AI agents, one task each, no memory of prior runs.
