@@ -2,6 +2,13 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.2 - 2026-06-08
+
+### Docs
+
+- Added an agent adoption / token-economy benchmark (`docs/benchmarks/2026-06-07-agent-token-economy.md`): **100% spontaneous adoption** (11/11 fresh-context agents chose code-intel unprompted), token savings that scale with task difficulty (**+13% to +34%** on debugging traces, large-file comprehension, and ambiguous-name searches; near-parity on simple grep-friendly lookups), and type-checked precision (no grep false positives).
+- Refreshed the README: full 13-tool list, benchmark highlights, a self-describing-server note (the MCP `initialize.instructions` mean no consumer-side prompt forcing is needed), and configuration notes (`workspaceRoot`, deferred tools, cold-start, reconnect).
+
 ## 0.3.1 - 2026-06-07
 
 ### Fixed
