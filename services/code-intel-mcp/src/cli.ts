@@ -5,7 +5,7 @@ import {
   DEFAULT_MAX_BODY_BYTES,
   DEFAULT_PORT
 } from './server-config.ts';
-import { isExistingDirectory, normalizeWorkspaceRoot, toErrorMessage } from './server-utils.ts';
+import { getAllowedWorkspaceRoots, isExistingDirectory, normalizeWorkspaceRoot, toErrorMessage } from './server-utils.ts';
 
 export type CliCommand = 'start' | 'status' | 'ensure' | 'help' | 'self-test' | 'stdio';
 
@@ -16,6 +16,8 @@ export interface CliStartOptions {
   logRequests: boolean;
   apiKey?: string;
   maxBodyBytes: number;
+  /** Operator allowlist of workspace-root glob patterns allowed outside the default. */
+  allowedWorkspaceRoots?: string[];
 }
 
 export interface ResolvedCliOptions {
@@ -299,6 +301,10 @@ export function buildStartChildArguments(startOptions: CliStartOptions): string[
     args.push('--log-requests');
   }
 
+  for (const allowedRoot of startOptions.allowedWorkspaceRoots ?? []) {
+    args.push(`--allowed-workspace-root=${allowedRoot}`);
+  }
+
   return args;
 }
 
@@ -355,6 +361,7 @@ export function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv = process
   const logRequests = hasFlag(argv, 'log-requests') || hasFlag(argv, 'logRequests') || parseBooleanEnv(env.CODE_INTEL_LOG_REQUESTS);
   const apiKey = parseHost(env.CODE_INTEL_API_KEY);
   const maxBodyBytes = parsePositiveInteger(env.CODE_INTEL_MAX_BODY_BYTES) ?? DEFAULT_MAX_BODY_BYTES;
+  const allowedRoots = getAllowedWorkspaceRoots(env, argv);
 
   return {
     command,
@@ -365,7 +372,8 @@ export function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv = process
       port,
       logRequests,
       apiKey,
-      maxBodyBytes
+      maxBodyBytes,
+      allowedWorkspaceRoots: allowedRoots.length > 0 ? allowedRoots : undefined
     },
     timeoutMs,
     healthUrl,
@@ -383,12 +391,15 @@ function renderHelp(): string {
     '  ensure   Start the server if needed and wait until it is healthy.',
     '',
     'Common options:',
-    '  --workspaceRoot <path>   Default workspace root for tool requests.',
-    '  --port <number>          Server port. Default: 4545.',
-    '  --timeout <ms>           Health wait timeout for ensure/status helpers.',
-    '  --host <host>            Server host. Default: 127.0.0.1.',
-    '  --health-url <url>       Override the health endpoint URL/path.',
-    '  --verbose                Print progress details for helper commands.'
+    '  --workspaceRoot <path>            Default workspace root for tool requests.',
+    '  --allowed-workspace-root <glob>   Allow a request workspaceRoot outside the default',
+    '                                    (repeatable; also CODE_INTEL_ALLOWED_WORKSPACE_ROOTS,',
+    '                                    comma/semicolon separated). Use for sibling git worktrees.',
+    '  --port <number>                   Server port. Default: 4545.',
+    '  --timeout <ms>                    Health wait timeout for ensure/status helpers.',
+    '  --host <host>                     Server host. Default: 127.0.0.1.',
+    '  --health-url <url>                Override the health endpoint URL/path.',
+    '  --verbose                         Print progress details for helper commands.'
   ].join('\n');
 }
 
