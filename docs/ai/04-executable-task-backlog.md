@@ -106,6 +106,11 @@ Status: done (2026-02-23)
 Owner: security-agent
 - Secret exclusion filters and trust boundaries for tools.
 
+### T-016 Workspace-root allowlist for worktrees
+Owner: tooling-agent
+- Allow an explicit operator allowlist (`--allowed-workspace-root` / `CODE_INTEL_ALLOWED_WORKSPACE_ROOTS`) so a request workspaceRoot outside the default (e.g. a sibling git worktree) is authorized without weakening the default sandbox. Match canonical realpath; keep `..`/symlink escapes blocked.
+Status: done (2026-06-13)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.

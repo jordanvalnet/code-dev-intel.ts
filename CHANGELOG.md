@@ -2,6 +2,12 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.6 - 2026-06-13
+
+### Added
+
+- **Explicit workspace-root allowlist for sibling worktrees.** A request `workspaceRoot` outside the configured default `--workspaceRoot` is still rejected by default, but operators can now authorize specific paths via repeatable `--allowed-workspace-root=<glob>` CLI args or the `CODE_INTEL_ALLOWED_WORKSPACE_ROOTS` env var (comma/semicolon-separated globs). Patterns are matched against the canonical (realpath-resolved) path, so `..`/symlink traversal stays blocked, and the strict default-boundary behavior is unchanged when no patterns are configured. This lets the MCP run against a git worktree that is a sibling of the main checkout (instead of falling back to grep).
+
 ## 0.3.5 - 2026-06-08
 
 ### Docs

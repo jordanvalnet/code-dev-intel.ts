@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
-import { assertWithinWorkspace, isPathWithinWorkspace } from './safe-path.ts';
+import { assertWithinWorkspace, isPathWithinWorkspace, matchesAnyPathPattern } from './safe-path.ts';
 
 export class HttpError extends Error {
   readonly statusCode: number;
@@ -30,9 +30,58 @@ export function normalizeWorkspaceRoot(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * Parse the `CODE_INTEL_ALLOWED_WORKSPACE_ROOTS` env var — a comma/semicolon
+ * separated list of glob patterns (neither char appears in real POSIX/Windows
+ * absolute paths, so splitting is unambiguous).
+ */
+export function parseAllowedWorkspaceRootsFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.CODE_INTEL_ALLOWED_WORKSPACE_ROOTS?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(/[;,]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+/** Collect every repeatable `--allowed-workspace-root=<pattern>` CLI argument. */
+export function parseAllowedWorkspaceRootsFromArgs(argv: string[] = process.argv): string[] {
+  const prefix = '--allowed-workspace-root=';
+  const roots: string[] = [];
+
+  for (const arg of argv) {
+    if (typeof arg === 'string' && arg.startsWith(prefix)) {
+      const value = arg.slice(prefix.length).trim();
+      if (value.length > 0) {
+        roots.push(value);
+      }
+    }
+  }
+
+  return roots;
+}
+
+/**
+ * Operator-configured allowlist of workspace-root glob patterns (env first,
+ * then CLI args). An explicitly-listed pattern lets a request target a root
+ * OUTSIDE the default — e.g. a sibling git worktree — without weakening the
+ * default-boundary sandbox for unconfigured deployments (empty list ⇒ the
+ * original strict behavior).
+ */
+export function getAllowedWorkspaceRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  argv: string[] = process.argv
+): string[] {
+  return [...parseAllowedWorkspaceRootsFromEnv(env), ...parseAllowedWorkspaceRootsFromArgs(argv)];
+}
+
 export function resolveAndValidateWorkspaceRoot(
   requestWorkspaceRoot: string | undefined,
-  defaultWorkspaceRoot?: string
+  defaultWorkspaceRoot?: string,
+  allowedWorkspaceRoots: string[] = getAllowedWorkspaceRoots()
 ): string | undefined {
   const canonicalDefaultRoot = defaultWorkspaceRoot ? assertWithinWorkspace(defaultWorkspaceRoot, '.') : undefined;
   const canonicalRequestRoot = requestWorkspaceRoot ? assertWithinWorkspace(requestWorkspaceRoot, '.') : undefined;
@@ -46,7 +95,12 @@ export function resolveAndValidateWorkspaceRoot(
     throw new HttpError(400, 'invalid workspaceRoot', 'INVALID_WORKSPACE_ROOT');
   }
 
-  if (canonicalDefaultRoot && canonicalRequestRoot && !isPathWithinWorkspace(canonicalDefaultRoot, canonicalRequestRoot)) {
+  if (
+    canonicalDefaultRoot &&
+    canonicalRequestRoot &&
+    !isPathWithinWorkspace(canonicalDefaultRoot, canonicalRequestRoot) &&
+    !matchesAnyPathPattern(canonicalRequestRoot, allowedWorkspaceRoots)
+  ) {
     throw new HttpError(
       400,
       'workspaceRoot must stay within configured default workspace root',

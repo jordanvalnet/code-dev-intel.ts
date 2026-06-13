@@ -260,6 +260,7 @@ The package can be exposed either as:
 - **Deferred tools:** some clients load MCP tool schemas on demand. If the `mcp__code-intel__*` tools aren't visible yet, have the agent load them first (in Claude Code, via `ToolSearch`); the server's `initialize.instructions` also prompt their use.
 - **First call is slow, the rest are fast:** the first semantic call builds the TypeScript program (a few seconds on a large repo), then it's cached for the session.
 - **Reconnect after upgrading:** when you change the version or config, reconnect/restart the MCP server so the client reloads the tools and instructions.
+- **Working in a git worktree?** By default a request `workspaceRoot` must stay within the startup `--workspaceRoot`. To authorize a path outside it (e.g. a sibling git worktree), pass `--allowed-workspace-root=<glob>` (repeatable) or set `CODE_INTEL_ALLOWED_WORKSPACE_ROOTS` (comma/semicolon-separated globs) — e.g. `--workspaceRoot=. --allowed-workspace-root="/repos/myapp*"`. Patterns are matched against the canonical (realpath-resolved) path, so `..`/symlink escapes stay blocked; with no patterns configured, the strict default-boundary behavior is unchanged.
 
 ### VS Code / GitHub Copilot
 

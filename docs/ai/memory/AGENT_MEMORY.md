@@ -188,3 +188,13 @@ LOCK: none
 - Risks: Single-iteration sample is a smoke-level check; weekly CI runs will provide trend stability.
 - Next: Proceed to T-015 hardening.
 - Blockers: none
+
+## [2026-06-13T18:20:00Z] ClaudeOpus | T-016
+- Status: done
+- Summary: Added an explicit operator allowlist so a request workspaceRoot outside the configured default (e.g. a sibling git worktree) can be authorized via repeatable `--allowed-workspace-root=<glob>` or the `CODE_INTEL_ALLOWED_WORKSPACE_ROOTS` env var, without weakening the default sandbox.
+- Decisions: Chose explicit operator config over auto-detecting a `.git` entry — a planted `.git` could widen the sandbox and is non-auditable. Patterns are matched (picomatch) against the canonical realpath of the request root, so `..`/symlink escapes stay blocked; an empty allowlist preserves the original strict behavior.
+- Files: services/code-intel-mcp/src/safe-path.ts, services/code-intel-mcp/src/server-utils.ts, services/code-intel-mcp/src/cli.ts, __tests__/unit/code-intel-mcp/server-utils.test.ts, __tests__/unit/code-intel-mcp/security.test.ts, __tests__/unit/code-intel-mcp/cli.test.ts, README.md, CHANGELOG.md, package.json, docs/ai/04-executable-task-backlog.md, docs/ai/memory/AGENT_MEMORY.md
+- Evidence: `pnpm lint` (eslint --max-warnings 0) clean; `pnpm type-check` clean; `pnpm test` 20 files / 153 tests passed (new server-utils allowlist unit tests + security accept-case integration test + cli forwarding tests).
+- Risks: Operator-provided globs are trusted by design; an over-broad pattern (e.g. `/**`) widens access — documented in README.
+- Next: Publish v0.3.6 and pass `--allowed-workspace-root` in the consuming `.mcp.json` for worktree use.
+- Blockers: none
