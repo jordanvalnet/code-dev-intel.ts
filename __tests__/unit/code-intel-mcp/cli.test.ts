@@ -116,6 +116,30 @@ describe('code-dev-intel CLI', () => {
     ]);
   });
 
+  it('parses allowed workspace roots from env and repeatable args', () => {
+    const options = parseCliOptions(
+      ['ensure', '--allowed-workspace-root=/a/*', '--allowed-workspace-root=/b/**'],
+      { CODE_INTEL_ALLOWED_WORKSPACE_ROOTS: '/env/*' }
+    );
+
+    expect(options.startOptions.allowedWorkspaceRoots).toEqual(['/env/*', '/a/*', '/b/**']);
+  });
+
+  it('forwards allowed workspace roots to the detached start child', () => {
+    const args = buildStartChildArguments({
+      workspaceRoot: '.',
+      host: '127.0.0.1',
+      port: 4545,
+      logRequests: false,
+      apiKey: undefined,
+      maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+      allowedWorkspaceRoots: ['/a/*', '/b/**']
+    });
+
+    expect(args).toContain('--allowed-workspace-root=/a/*');
+    expect(args).toContain('--allowed-workspace-root=/b/**');
+  });
+
   it('probes the real health endpoint successfully', async () => {
     const server = startMcpSkeletonServer(0);
     runningServer = server;

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startMcpSkeletonServer } from '../../../services/code-intel-mcp/src/server.ts';
@@ -46,6 +46,7 @@ afterEach(async () => {
   delete process.env.CODE_INTEL_MAX_BODY_BYTES;
   delete process.env.CODE_INTEL_HOST;
   delete process.env.CODE_INTEL_API_KEY;
+  delete process.env.CODE_INTEL_ALLOWED_WORKSPACE_ROOTS;
 });
 
 describe('mcp security hardening', () => {
@@ -123,6 +124,28 @@ describe('mcp security hardening', () => {
     const payload = (await response.json()) as { ok: boolean; error: string };
     expect(response.status).toBe(400);
     expect(payload.error).toBe('workspaceRoot must stay within configured default workspace root');
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('accepts a workspaceRoot outside the default when it matches an explicit allowlist pattern', async () => {
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'dev-intel-security-allowed-'));
+    // Operator opt-in: authorize anything under the OS temp dir (a sibling of
+    // the configured default). Without this, the same request is rejected by
+    // the boundary test above.
+    process.env.CODE_INTEL_ALLOWED_WORKSPACE_ROOTS = `${realpathSync(tmpdir())}/**`;
+    const { baseUrl, close } = await startServer(fixtureWorkspaceRoot);
+
+    const response = await fetch(`${baseUrl}/tools/searchText`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceRoot: outsideRoot, query: 'buildGreeting' })
+    });
+
+    const payload = (await response.json()) as { ok: boolean; error?: string };
+    expect(response.status).toBe(200);
+    expect(payload.ok).toBe(true);
 
     await close();
     runningServer = undefined;

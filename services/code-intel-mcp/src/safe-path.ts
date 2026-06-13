@@ -1,5 +1,6 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import picomatch from 'picomatch';
 
 function normalizeForCompare(value: string): string {
   const normalized = value.replaceAll('\\', '/').replace(/\/+$/g, '');
@@ -44,4 +45,25 @@ export function isPathWithinWorkspace(workspaceRoot: string, candidatePath: stri
   const rootCanonical = canonicalizePath(workspaceRoot);
   const candidateCanonical = canonicalizePath(candidatePath);
   return isWithinBoundary(rootCanonical, candidateCanonical);
+}
+
+/**
+ * Returns true if `candidatePath` matches any of the operator-configured glob
+ * `patterns`. Both sides are normalized the same way the boundary check uses
+ * (forward slashes, no trailing slash, lower-cased on win32), so an explicit
+ * allowlist entry can authorize a path OUTSIDE the default workspace root —
+ * e.g. a sibling git worktree. The caller passes an already-canonical
+ * (realpath-resolved) `candidatePath`, so `..`/symlink escapes are resolved
+ * before matching and cannot widen the allowlist.
+ */
+export function matchesAnyPathPattern(candidatePath: string, patterns: string[]): boolean {
+  const normalizedPatterns = patterns
+    .map((pattern) => normalizeForCompare(pattern))
+    .filter((pattern) => pattern.length > 0);
+
+  if (normalizedPatterns.length === 0) {
+    return false;
+  }
+
+  return picomatch(normalizedPatterns)(normalizeForCompare(candidatePath));
 }
