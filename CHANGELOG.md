@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.3.7 - 2026-06-14
+
+### Security
+
+- **Dependency security update — `pnpm audit` is clean again (was 1 critical, 9 high, 6 moderate, 1 low).** The CI `pnpm audit --audit-level=high` gate is green. Changes, all in the dev/test toolchain except `picomatch`:
+  - `vitest` / `@vitest/coverage-v8` upgraded 3.x → 4.x — clears the **critical** Vitest UI arbitrary-file-read advisory (GHSA-5xrq-8626-4rwp) and brings a patched Vite 7.3.x toolchain. Full test suite (153 tests) and v8 coverage verified green under Vitest 4.
+  - `picomatch` (the only shipped runtime dependency touched) bumped 4.0.3 → 4.0.4 for the extglob ReDoS fix — a patch, no API change.
+  - `vite` pinned to `^7.3.5` as an explicit devDependency. The vulnerable Vite (>=7.0.0 <=7.3.1) was an auto-installed peer of Vitest, which `pnpm.overrides` cannot reach; declaring it directly forces the patched version (GHSA-p9ff-h696-f583 and the dev-server file-read advisories).
+  - Added scoped `pnpm.overrides` for the remaining transitive advisories: `esbuild` ≥0.28.1, `minimatch` ≥3.1.5 / ≥9.0.9, `flatted` ≥3.4.2, `brace-expansion` ≥1.1.15, `picomatch` ≥4.0.4, `postcss` ≥8.5.10.
+
 ## 0.3.6 - 2026-06-13
 
 ### Added
