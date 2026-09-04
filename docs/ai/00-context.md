@@ -1,9 +1,9 @@
 # 00 - Context
 
-## Source project
+## Target project profile
 
-- Product repo: `<target-typescript-project-root>`
-- Tech stack: Next.js 16, React 19, TypeScript 5.9, pnpm, Vitest, Playwright, Supabase + Drizzle
+- Product repo: `<target-typescript-project-root>` (a private consumer repository, outside this package)
+- Tech stack: Next.js / React / TypeScript, pnpm, Vitest
 - Architecture: hexagonal (domain/application/adapters/infrastructure/presentation)
 
 ## Problem to solve
@@ -22,7 +22,7 @@ Expected outcome:
 
 - 100% self-hosted.
 - Local-first for each developer (branch-aware, workspace-aware).
-- Must run on common dev machines (16GB RAM already loaded by VS Code, Docker, Supabase, browser).
+- Must run on common dev machines (16GB RAM already loaded by VS Code, Docker, local services, browser).
 - Priorities:
   1) Agent effectiveness + code quality
   2) Precision over raw speed

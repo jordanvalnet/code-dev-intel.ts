@@ -455,7 +455,7 @@ describe('buildWorkspaceGraph import extraction', () => {
   });
 
   it('propagates impact through a multi-line type-only alias import', () => {
-    // The shape Prettier produces in a real Next.js app: the adapter that implements a
+    // The shape Prettier produces in a formatted codebase: the adapter that implements a
     // port imports its types across several lines, through a `paths` alias. Before the
     // scanner-based extractor these statements produced no edge at all, so the port's
     // implementers were missing from the impact set.
@@ -466,8 +466,8 @@ describe('buildWorkspaceGraph import extraction', () => {
       root,
       'src/domain/ports/notification/NotificationPort.ts',
       [
-        'export interface DeleteNotificationInput { id: string }',
-        'export interface NotificationPort { remove(input: DeleteNotificationInput): void }',
+        'export interface SendNotificationInput { id: string }',
+        'export interface NotificationPort { send(input: SendNotificationInput): void }',
         ''
       ].join('\n')
     );
@@ -476,12 +476,12 @@ describe('buildWorkspaceGraph import extraction', () => {
       'src/adapters/notification/EmailNotificationAdapter.ts',
       [
         'import type {',
-        '  DeleteNotificationInput,',
+        '  SendNotificationInput,',
         '  NotificationPort,',
         "} from '@/domain/ports/notification/NotificationPort';",
         '',
         'export class EmailNotificationAdapter implements NotificationPort {',
-        '  remove(input: DeleteNotificationInput): void {',
+        '  send(input: SendNotificationInput): void {',
         '    void input;',
         '  }',
         '}',
@@ -495,7 +495,7 @@ describe('buildWorkspaceGraph import extraction', () => {
     );
 
     expect(edge?.targetFile).toBe('src/domain/ports/notification/NotificationPort.ts');
-    expect(edge?.importedSymbols).toEqual(['DeleteNotificationInput', 'NotificationPort']);
+    expect(edge?.importedSymbols).toEqual(['SendNotificationInput', 'NotificationPort']);
 
     const impacted = calculateWorkspaceImpactedFiles({
       workspaceRoot: root,

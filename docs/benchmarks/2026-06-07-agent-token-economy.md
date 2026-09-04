@@ -1,6 +1,6 @@
 # Benchmark — spontaneous adoption & token economy (2026-06-07)
 
-Does giving a coding agent `code-intel` actually change its behavior, and does it save tokens on real work? We measured it on a large production TypeScript repository (Next.js, hexagonal architecture, ~1,450 dependencies, hundreds of source files, individual files up to ~1,200 lines) with `code-dev-intel.ts` v0.3.0.
+Does giving a coding agent `code-intel` actually change its behavior, and does it save tokens on real work? We measured it on a large private production TypeScript repository (Next.js, hexagonal architecture, ~1,450 dependencies, hundreds of source files, individual files up to ~1,200 lines) with `code-dev-intel.ts` v0.3.0.
 
 ## TL;DR
 
@@ -61,7 +61,7 @@ The harder the task, the more the grep baseline pays — it reads 12–14 files 
 
 ## Quality (not visible in the token numbers)
 
-- **No false positives.** On the ambiguous-type task, the grep-only control had to write out an explicit exclusion list ("Notable false matches I excluded: `RecordType`, `RecordStatus`, `RecordWithImage`, …") and read 14 files to disambiguate. The treatment agent got a type-checker-authoritative result from `findReferences` in one step.
+- **No false positives.** On the ambiguous-type task, the grep-only control had to write out an explicit exclusion list of unrelated types that merely share the searched name as a prefix, and read 14 files to disambiguate. The treatment agent got a type-checker-authoritative result from `findReferences` in one step.
 - **Precise localization.** On the debugging task the semantic agent used `findDefinitions`/`getSymbolContent` to land directly on the generator and the unvalidated create-path; the control read 12 files to reconstruct the same picture.
 
 ## Caveats (so the numbers are honest)
