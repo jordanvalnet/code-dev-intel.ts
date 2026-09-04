@@ -36,6 +36,12 @@ function hashValue(value: string): string {
 }
 
 function resolveChangedFilesFromGit(workspaceRoot: string, sinceGitRef: string): Set<string> {
+  // Defense in depth behind the request schema: a leading '-' would let git parse the
+  // value as an option (e.g. --output=<path> writes a file wherever the caller says).
+  if (sinceGitRef.startsWith('-')) {
+    throw new Error('invalid sinceGitRef: must be a git revision, not an option');
+  }
+
   const gitResult = safeSpawnSync('git', ['diff', '--name-only', sinceGitRef, 'HEAD'], {
     cwd: workspaceRoot,
     allowedCommands: ['git']
@@ -198,7 +204,7 @@ function buildWindowsForFile(
       snippetPreview: buildSnippetPreview(windowLines),
       startColumn: 1,
       endColumn: 1
-    } as DuplicateWindow);
+    });
   }
 
   return windows;

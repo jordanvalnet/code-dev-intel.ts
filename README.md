@@ -426,6 +426,7 @@ curl http://127.0.0.1:4545/health
 
 - The default host is `127.0.0.1`.
 - If you bind to a non-local host, configure `CODE_INTEL_API_KEY`.
+- Browser requests: a `POST` that carries an `Origin` header is only accepted when the origin is the server itself (`http://127.0.0.1:<port>`, `http://localhost:<port>`) or listed in `CODE_INTEL_ALLOWED_ORIGINS` (comma/semicolon-separated origins, or `*`). This blocks CSRF / DNS-rebinding pages from driving the local server; IDEs, agents, curl and Node clients send no `Origin` and are unaffected.
 - All user-supplied paths are normalized and validated against workspace boundaries.
 - The server is designed for local-first use. If you expose it remotely, put it behind your normal network controls.
 

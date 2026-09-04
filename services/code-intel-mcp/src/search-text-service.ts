@@ -1,14 +1,17 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { relative, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import type { TextMatch, TextSearchResult } from './contracts.ts';
 import { assertWithinWorkspace } from './safe-path.ts';
-import { isCommandUnavailableError, safeSpawnSync } from './safe-spawn.ts';
+import { isCommandUnavailableError, isSpawnTimeoutError, safeSpawnSync } from './safe-spawn.ts';
 import { collectWorkspaceFiles } from './file-collection.ts';
 import { logger } from './logger.ts';
 
 const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.json']);
 const DEFAULT_MAX_RESULTS = 200;
+// The first ripgrep launch from a fresh server process costs ~5 s on Windows (binary cold
+// start / AV scan) even though later searches take ~0.2 s; 5 s tripped that systematically.
+const DEFAULT_RIPGREP_TIMEOUT_MS = 15_000;
 const ALLOWED_RIPGREP_BINARIES = ['rg', 'rg.exe', 'rg.cmd'];
 
 type RipgrepRunner = (
@@ -43,16 +46,38 @@ function resolveBundledRipgrepPath(): string | undefined {
     return cachedResolvedRipgrepPath;
   }
 
+  const arch = process.env.npm_config_arch || process.arch;
+  const binaryName = process.platform === 'win32' ? 'rg.exe' : 'rg';
+  const platformPkg = `@vscode/ripgrep-${process.platform}-${arch}`;
+  const requireFromHere = createRequire(import.meta.url);
+
+  // 1) Hoisted layouts (npm/yarn): the platform package is visible from this file.
+  const direct = tryResolveExistingFile(requireFromHere, `${platformPkg}/bin/${binaryName}`);
+  if (direct) {
+    cachedResolvedRipgrepPath = direct;
+    return cachedResolvedRipgrepPath;
+  }
+
+  // 2) Isolated layouts (pnpm): the platform package is an optionalDependency of
+  //    @vscode/ripgrep, so it is only resolvable from inside that package — exactly
+  //    what @vscode/ripgrep's own `rgPath` does. Resolving from our file fails there
+  //    and used to silently degrade searchText to the Node fallback engine.
   try {
-    const requireFromHere = createRequire(import.meta.url);
-    const arch = process.env.npm_config_arch || process.arch;
-    const binaryName = process.platform === 'win32' ? 'rg.exe' : 'rg';
-    const platformPkg = `@vscode/ripgrep-${process.platform}-${arch}`;
-    const resolved = requireFromHere.resolve(`${platformPkg}/bin/${binaryName}`);
-    if (existsSync(resolved)) {
-      cachedResolvedRipgrepPath = resolved;
+    const ripgrepEntry = requireFromHere.resolve('@vscode/ripgrep');
+    const fromRipgrep = tryResolveExistingFile(createRequire(ripgrepEntry), `${platformPkg}/bin/${binaryName}`);
+    if (fromRipgrep) {
+      cachedResolvedRipgrepPath = fromRipgrep;
       return cachedResolvedRipgrepPath;
     }
+
+    // 3) Legacy: a binary downloaded next to the package by its postinstall.
+    const legacyBinary = resolve(dirname(ripgrepEntry), '..', 'bin', binaryName);
+    if (existsSync(legacyBinary)) {
+      cachedResolvedRipgrepPath = legacyBinary;
+      return cachedResolvedRipgrepPath;
+    }
+
+    logger.warn('failed to resolve bundled @vscode/ripgrep binary', { platformPkg, ripgrepEntry });
   } catch (error) {
     logger.warn('failed to resolve bundled @vscode/ripgrep binary', {
       message: error instanceof Error ? error.message : String(error)
@@ -60,6 +85,15 @@ function resolveBundledRipgrepPath(): string | undefined {
   }
 
   return undefined;
+}
+
+function tryResolveExistingFile(requireFn: NodeJS.Require, specifier: string): string | undefined {
+  try {
+    const resolved = requireFn.resolve(specifier);
+    return existsSync(resolved) ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function resetBundledRipgrepPathCacheForTests(): void {
@@ -176,12 +210,12 @@ function loadGitignoreExcludePatterns(workspaceRoot: string): string[] {
 function parseSpawnTimeoutFromEnv(): number {
   const raw = process.env.CODE_INTEL_SPAWN_TIMEOUT?.trim();
   if (!raw) {
-    return 5000;
+    return DEFAULT_RIPGREP_TIMEOUT_MS;
   }
 
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    return 5000;
+    return DEFAULT_RIPGREP_TIMEOUT_MS;
   }
 
   return parsed;
@@ -299,7 +333,10 @@ export function searchTextWithRipgrep(
     args.push('--ignore-file', gitignorePath);
   }
 
-  args.push(query, ...includePaths.map((includePath) => resolve(safeWorkspaceRoot, includePath)));
+  // '-e' makes the caller-controlled query a pattern operand even when it starts with
+  // '-' (otherwise ripgrep would parse e.g. '--pre=./evil.sh' as a flag and execute it),
+  // and '--' terminates option parsing before the search paths.
+  args.push('-e', query, '--', ...includePaths.map((includePath) => resolve(safeWorkspaceRoot, includePath)));
 
   const ripgrepCommand = resolveBundledRipgrepPath() ?? 'rg';
 
@@ -332,6 +369,19 @@ export function searchTextWithRipgrep(
       engine: 'ripgrep',
       matches: []
     };
+  }
+
+  if (result.error && isSpawnTimeoutError(result.error)) {
+    // A cold-cache first search on a large repository can exceed the spawn timeout;
+    // degrade to the node engine (with the reason) instead of failing the request,
+    // the same way searchStruct reports an ast-grep timeout.
+    return searchWithNodeFallback(
+      safeWorkspaceRoot,
+      query,
+      maxResults,
+      searchPath,
+      `ripgrep timed out after ${parseSpawnTimeoutFromEnv()}ms. Increase CODE_INTEL_SPAWN_TIMEOUT (milliseconds) for large workspaces.`
+    );
   }
 
   if (result.error && !isCommandUnavailableError(result.error)) {

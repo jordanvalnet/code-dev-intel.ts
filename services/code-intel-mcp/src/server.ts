@@ -13,8 +13,10 @@ import { spawn as spawnChildProcess } from 'node:child_process';
 import { logger, setLoggerSinkToStderr } from './logger.ts';
 import {
   HttpError,
+  isAllowedOrigin,
   isExistingDirectory,
   normalizeWorkspaceRoot,
+  parseAllowedOriginsFromEnv,
   readJsonBody,
   summarizePayloadForLogs,
   toErrorMessage
@@ -134,6 +136,32 @@ export function startMcpSkeletonServerWithOptions(
     defaultWorkspaceRoot ?? normalizeWorkspaceRoot(process.env.CODE_INTEL_WORKSPACE_ROOT) ?? getWorkspaceRootFromArgs();
   const { host, apiKey, maxBodyBytes } = runtimeOptions;
   const isNonLocalHost = host !== '127.0.0.1' && host !== 'localhost';
+  const allowedOrigins = parseAllowedOriginsFromEnv();
+
+  function createForbiddenOriginPayload(request: IncomingMessage): { statusCode: number; payload: { ok: false; error: string } } | null {
+    const origin = request.headers.origin;
+    if (typeof origin !== 'string' || origin.length === 0) {
+      return null;
+    }
+
+    const address = server.address();
+    const listeningPort = address && typeof address === 'object' ? address.port : port;
+    const serverOrigins = [
+      `http://127.0.0.1:${listeningPort}`,
+      `http://localhost:${listeningPort}`,
+      `http://[::1]:${listeningPort}`,
+      `http://${host}:${listeningPort}`
+    ];
+
+    if (isAllowedOrigin(origin, serverOrigins, allowedOrigins)) {
+      return null;
+    }
+
+    return {
+      statusCode: 403,
+      payload: { ok: false, error: 'forbidden origin' }
+    };
+  }
 
   function createUnauthorizedPayload(): { statusCode: number; payload: { ok: false; error: string } } | null {
     if (isNonLocalHost && !apiKey) {
@@ -180,6 +208,14 @@ export function startMcpSkeletonServerWithOptions(
     if (invalidApiKey) {
       return {
         ...invalidApiKey,
+        requestBody: undefined
+      };
+    }
+
+    const forbiddenOrigin = createForbiddenOriginPayload(request);
+    if (forbiddenOrigin) {
+      return {
+        ...forbiddenOrigin,
         requestBody: undefined
       };
     }
@@ -243,6 +279,12 @@ export function startMcpSkeletonServerWithOptions(
         const invalidApiKey = createInvalidApiKeyPayload(request);
         if (invalidApiKey) {
           respond(invalidApiKey.statusCode, invalidApiKey.payload);
+          return;
+        }
+
+        const forbiddenOrigin = createForbiddenOriginPayload(request);
+        if (forbiddenOrigin) {
+          respond(forbiddenOrigin.statusCode, forbiddenOrigin.payload);
           return;
         }
 
@@ -356,11 +398,7 @@ async function runSelfTest(): Promise<void> {
   const textJson = (await textResponse.json()) as ToolResponse;
 
   let structStatus = 0;
-  let structJson: ToolResponse | { ok: false; skipped: true; reason: string } = {
-    ok: false,
-    skipped: true,
-    reason: 'not executed'
-  };
+  let structJson: ToolResponse | { ok: false; skipped: true; reason: string };
 
   try {
     const structResponse = await fetch(`${baseUrl}/tools/searchStruct`, {

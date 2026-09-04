@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, normalize, relative, resolve } from 'node:path';
 
 export interface ImportEdge {
@@ -20,6 +20,23 @@ export interface ImpactedFilesOptions {
 }
 
 const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
+// Same build/output directories searchText ignores: walking a Next.js `.next/` or a
+// coverage report (megabytes of minified JS) made impactedFiles block the server for minutes.
+const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git', 'dist', 'coverage', '.next']);
+
+/**
+ * Directories the workspace walk must not enter. Mirrors ripgrep's defaults (which
+ * `searchText` already inherits): hidden directories are skipped, and so is any nested
+ * git checkout — e.g. worktrees kept under `.claude/worktrees/` or `.worktrees/`, which
+ * otherwise multiply the graph by the number of worktrees (66k files on one real repo).
+ */
+export function shouldSkipDirectory(name: string, absolutePath: string): boolean {
+  if (SKIPPED_DIRECTORIES.has(name) || name.startsWith('.')) {
+    return true;
+  }
+
+  return existsSync(join(absolutePath, '.git'));
+}
 
 function toPosixPath(value: string): string {
   return normalize(value).replaceAll('\\', '/');
@@ -36,13 +53,11 @@ function listSourceFiles(workspaceRoot: string): string[] {
     const entries = readdirSync(currentDir, { withFileTypes: true });
 
     for (const entry of entries) {
-      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') {
-        continue;
-      }
-
       const absolutePath = join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        walk(absolutePath);
+        if (!shouldSkipDirectory(entry.name, absolutePath)) {
+          walk(absolutePath);
+        }
         continue;
       }
 

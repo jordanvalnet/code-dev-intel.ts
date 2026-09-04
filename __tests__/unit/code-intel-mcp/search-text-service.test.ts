@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  resetBundledRipgrepPathCacheForTests,
   resetRipgrepRunnerForTests,
   searchTextWithRipgrep,
   setRipgrepRunnerForTests
@@ -87,6 +88,56 @@ describe('search-text-service', () => {
     expect(result.engine).toBe('node-fallback');
     expect(result.matches.length).toBeGreaterThan(0);
     expect(result.matches[0]?.filePath).toBe('src/file.ts');
+  });
+
+  it('degrades to the node engine with a reason when ripgrep exceeds the spawn timeout', () => {
+    const workspaceRoot = createWorkspaceFixture();
+    setRipgrepRunnerForTests(() => ({
+      status: null,
+      stdout: '',
+      stderr: '',
+      error: Object.assign(new Error('spawnSync rg ETIMEDOUT'), { code: 'ETIMEDOUT' })
+    }));
+
+    const result = searchTextWithRipgrep(workspaceRoot, 'buildGreeting');
+
+    expect(result.engine).toBe('node-fallback');
+    expect(result.engineFallbackReason).toContain('ripgrep timed out');
+    expect(result.engineFallbackReason).toContain('CODE_INTEL_SPAWN_TIMEOUT');
+    expect(result.matches.map((match) => match.filePath)).toEqual(['src/file.ts']);
+  });
+
+  it('uses the bundled ripgrep binary in a real install (never the node fallback)', () => {
+    // Real runner + real resolution: under pnpm the platform package is only visible from
+    // @vscode/ripgrep's own location, which used to silently degrade to the node fallback.
+    resetRipgrepRunnerForTests();
+    resetBundledRipgrepPathCacheForTests();
+    const workspaceRoot = createWorkspaceFixture();
+
+    const result = searchTextWithRipgrep(workspaceRoot, 'buildGreeting');
+
+    expect(result.engineFallbackReason).toBeUndefined();
+    expect(result.engine).toBe('ripgrep');
+    expect(result.matches.map((match) => match.filePath)).toEqual(['src/file.ts']);
+  });
+
+  it('passes the query as a pattern operand (-e) and terminates options with -- so a leading-dash query cannot inject ripgrep flags', () => {
+    const workspaceRoot = createWorkspaceFixture();
+    let receivedArgs: readonly string[] = [];
+
+    setRipgrepRunnerForTests((_command, args) => {
+      receivedArgs = args;
+      return { status: 1, stdout: '', stderr: '' };
+    });
+
+    searchTextWithRipgrep(workspaceRoot, '--pre=./evil.sh');
+
+    const patternFlagIndex = receivedArgs.indexOf('-e');
+    expect(patternFlagIndex).toBeGreaterThan(-1);
+    expect(receivedArgs[patternFlagIndex + 1]).toBe('--pre=./evil.sh');
+    expect(receivedArgs[patternFlagIndex + 2]).toBe('--');
+    // Everything after '--' is a search path inside the workspace, never a flag.
+    expect(receivedArgs.slice(patternFlagIndex + 3).every((value) => !value.startsWith('-'))).toBe(true);
   });
 
   it('searches workspace root by default', () => {

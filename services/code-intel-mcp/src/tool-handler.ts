@@ -5,10 +5,8 @@ import {
   FindDuplicatesRequestSchema,
   type FindDuplicatesResult,
   type FindSymbolResult,
-  type FileOutlineResult,
   ToolRequestBodySchema,
   type StructSearchResult,
-  type SymbolContentResult,
   type TextSearchResult,
   type SymbolQueryResult,
   type ToolName,
@@ -96,7 +94,7 @@ function createStructPayload(request: ToolRequest): ToolResponse {
         pattern: '',
         language: 'ts',
         matches: []
-      } as StructSearchResult,
+      },
       error: 'query is required for searchStruct'
     };
   }
@@ -121,7 +119,7 @@ function createTextPayload(request: ToolRequest): ToolResponse {
         query: '',
         engine: 'ripgrep',
         matches: []
-      } as TextSearchResult,
+      },
       error: 'query is required for searchText'
     };
   }
@@ -154,7 +152,7 @@ function createFileOutlinePayload(request: ToolRequest): ToolResponse {
         filePath: '',
         appliedKinds: [],
         symbolsByKind: {}
-      } as FileOutlineResult,
+      },
       error: 'filePath is required for getFileOutline'
     };
   }
@@ -192,7 +190,7 @@ function createSymbolContentPayload(request: ToolRequest): ToolResponse {
         endColumn: 0,
         content: '',
         truncated: false
-      } as SymbolContentResult,
+      },
       error: 'filePath and symbol are required for getSymbolContent'
     };
   }
@@ -223,7 +221,7 @@ function createDependencyGraphPayload(request: ToolRequest): ToolResponse {
         dependencies: [],
         externalDependencies: [],
         edges: []
-      } as DependencyGraphResult,
+      },
       error: 'filePath is required for dependencyGraph'
     };
   }

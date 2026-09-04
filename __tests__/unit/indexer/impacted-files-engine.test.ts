@@ -90,6 +90,21 @@ describe('calculateWorkspaceImpactedFiles', () => {
 });
 
 describe('buildWorkspaceGraph', () => {
+  it('skips hidden directories and nested git checkouts such as worktrees', () => {
+    const root = createWorkspace();
+
+    writeSourceFile(root, 'src/a.ts', 'export const a = 1;\n');
+    writeSourceFile(root, '.claude/worktrees/feature/src/a.ts', 'export const a = 1;\n');
+    writeSourceFile(root, '.worktrees/other/src/a.ts', 'export const a = 1;\n');
+    writeSourceFile(root, 'vendor/checkout/.git/HEAD', 'ref: refs/heads/main\n');
+    writeSourceFile(root, 'vendor/checkout/src/a.ts', 'export const a = 1;\n');
+    writeSourceFile(root, 'vendor/plain/b.ts', 'export const b = 1;\n');
+
+    const graph = buildWorkspaceGraph(root);
+
+    expect(graph.files).toEqual(['src/a.ts', 'vendor/plain/b.ts']);
+  });
+
   it('discovers all source files excluding node_modules/dist/.git', () => {
     const root = createWorkspace();
 

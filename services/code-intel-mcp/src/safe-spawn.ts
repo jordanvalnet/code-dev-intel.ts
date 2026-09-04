@@ -106,6 +106,15 @@ export function safeSpawnSync(
   };
 }
 
+/** True when spawnSync gave up because the child exceeded its `timeout`. */
+export function isSpawnTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (error as NodeJS.ErrnoException).code === 'ETIMEDOUT' || error.message.includes('ETIMEDOUT');
+}
+
 export function isCommandUnavailableError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;

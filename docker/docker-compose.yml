@@ -25,7 +25,7 @@ services:
 
   search-optional:
     profiles: ["search-optional"]
-    image: alpine:3.22
+    image: alpine:3.23
     container_name: code-dev-intel-search-optional
     command:
       [

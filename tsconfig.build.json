@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "rootDir": "./services",
     "noEmit": false,
     "outDir": "dist",
     "rewriteRelativeImportExtensions": true

@@ -78,6 +78,46 @@ export function getAllowedWorkspaceRoots(
   return [...parseAllowedWorkspaceRootsFromEnv(env), ...parseAllowedWorkspaceRootsFromArgs(argv)];
 }
 
+/**
+ * Parse `CODE_INTEL_ALLOWED_ORIGINS` — a comma/semicolon separated list of extra
+ * browser origins (scheme://host[:port]) allowed to call the server, or `*`.
+ */
+export function parseAllowedOriginsFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.CODE_INTEL_ALLOWED_ORIGINS?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(/[;,]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function normalizeOrigin(value: string): string {
+  return value.trim().toLowerCase().replace(/\/+$/g, '');
+}
+
+/**
+ * Browsers attach an `Origin` header to every cross-site (and modern same-site) POST,
+ * while IDEs, agents, curl and Node clients send none. A request that carries an Origin
+ * is therefore only accepted when that origin is the server itself or explicitly
+ * allowed by the operator — this blocks CSRF and DNS-rebinding pages from driving the
+ * (by default unauthenticated) localhost server without affecting non-browser clients.
+ */
+export function isAllowedOrigin(origin: string, serverOrigins: readonly string[], extraAllowedOrigins: readonly string[]): boolean {
+  if (extraAllowedOrigins.includes('*')) {
+    return true;
+  }
+
+  const normalized = normalizeOrigin(origin);
+  if (normalized.length === 0 || normalized === 'null') {
+    return false;
+  }
+
+  return [...serverOrigins, ...extraAllowedOrigins].map(normalizeOrigin).includes(normalized);
+}
+
 export function resolveAndValidateWorkspaceRoot(
   requestWorkspaceRoot: string | undefined,
   defaultWorkspaceRoot?: string,

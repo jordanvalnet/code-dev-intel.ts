@@ -1,5 +1,5 @@
-import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { extname, join, relative } from 'node:path';
+import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, extname, join, relative } from 'node:path';
 import picomatch from 'picomatch';
 import { assertWithinWorkspace, isPathWithinWorkspace } from './safe-path.ts';
 
@@ -47,7 +47,9 @@ export function collectWorkspaceFiles(options: CollectWorkspaceFilesOptions): st
       const relativePath = toUnixPath(relative(options.workspaceRoot, fullPath));
 
       if (stats.isDirectory()) {
-        if (excludeMatcher(relativePath)) {
+        // Hidden directories and nested git checkouts (worktrees) are never scanned,
+        // matching ripgrep's defaults — see impacted-files-engine.shouldSkipDirectory.
+        if (excludeMatcher(relativePath) || basename(fullPath).startsWith('.') || existsSync(join(fullPath, '.git'))) {
           continue;
         }
 

@@ -3,16 +3,19 @@ import {
   resetAstGrepPostinstallRunnerForTests,
   resetAstGrepRunnerForTests,
   resetBundledAstGrepPathCacheForTests,
+  resetLocalAstGrepExecutableForTests,
   searchStructWithAstGrep,
   setAstGrepPostinstallRunnerForTests,
   setAstGrepRunnerForTests,
-  setBundledAstGrepPathForTests
+  setBundledAstGrepPathForTests,
+  setLocalAstGrepExecutableForTests
 } from '../../../services/code-intel-mcp/src/ast-grep-service.ts';
 
 afterEach(() => {
   resetAstGrepRunnerForTests();
   resetAstGrepPostinstallRunnerForTests();
   resetBundledAstGrepPathCacheForTests();
+  resetLocalAstGrepExecutableForTests();
   delete process.env.CODE_INTEL_ASTGREP_PATH;
 });
 
@@ -96,6 +99,7 @@ describe('ast-grep-service', () => {
 
   it('falls back to pnpm dlx when local ast-grep shim is unavailable', () => {
     setBundledAstGrepPathForTests(null);
+    setLocalAstGrepExecutableForTests('E:/workspace/node_modules/@ast-grep/cli/ast-grep.exe');
     let invocation = 0;
 
     setAstGrepPostinstallRunnerForTests(() => ({
@@ -151,6 +155,7 @@ describe('ast-grep-service', () => {
 
   it('repairs ast-grep link via postinstall before dlx fallback', () => {
     setBundledAstGrepPathForTests(null);
+    setLocalAstGrepExecutableForTests('E:/workspace/node_modules/@ast-grep/cli/ast-grep.exe');
     let invocation = 0;
     let postinstallInvoked = false;
 

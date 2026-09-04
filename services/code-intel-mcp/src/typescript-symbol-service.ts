@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
+import { assertWithinWorkspace } from './safe-path.ts';
+import { HttpError } from './server-utils.ts';
 import type {
   CalleeEntry,
   CallerEntry,
@@ -83,6 +85,15 @@ function toSymbolLocation(sourceFile: ts.SourceFile, textSpan: ts.TextSpan): Sym
 }
 
 function resolveTargetFilePath(workspaceRoot: string, filePath: string): string {
+  // Boundary check first: realpath-resolves symlinks and rejects absolute or `..`
+  // escapes (throws 'path outside workspace root'), exactly like search-text and
+  // file-collection do. Without it `resolve()` lets an absolute filePath replace the
+  // workspace root and every symbol tool becomes an arbitrary-file reader.
+  try {
+    assertWithinWorkspace(workspaceRoot, filePath);
+  } catch {
+    throw new HttpError(400, 'path outside workspace root', 'PATH_OUTSIDE_WORKSPACE_ROOT');
+  }
   const absoluteFilePath = resolve(workspaceRoot, filePath);
   if (!existsSync(absoluteFilePath)) {
     throw new Error(`file not found: ${absoluteFilePath}`);

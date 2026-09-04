@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Server } from 'node:http';
+import { request as httpRequest, type Server } from 'node:http';
 import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -47,7 +47,43 @@ afterEach(async () => {
   delete process.env.CODE_INTEL_HOST;
   delete process.env.CODE_INTEL_API_KEY;
   delete process.env.CODE_INTEL_ALLOWED_WORKSPACE_ROOTS;
+  delete process.env.CODE_INTEL_ALLOWED_ORIGINS;
 });
+
+/** Raw HTTP POST so the test can set headers (such as Origin) that fetch() may refuse to forward. */
+function postJson(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {}
+): Promise<{ status: number; payload: { ok: boolean; error?: string } }> {
+  return new Promise((resolveResponse, rejectResponse) => {
+    const target = new URL(url);
+    const serialized = JSON.stringify(body);
+    const clientRequest = httpRequest(
+      {
+        host: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(serialized), ...headers }
+      },
+      (response) => {
+        let raw = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => (raw += chunk));
+        response.on('end', () => {
+          try {
+            resolveResponse({ status: response.statusCode ?? 0, payload: JSON.parse(raw) as { ok: boolean; error?: string } });
+          } catch (error) {
+            rejectResponse(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      }
+    );
+    clientRequest.on('error', rejectResponse);
+    clientRequest.end(serialized);
+  });
+}
 
 describe('mcp security hardening', () => {
   const fixtureWorkspaceRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
@@ -146,6 +182,71 @@ describe('mcp security hardening', () => {
     const payload = (await response.json()) as { ok: boolean; error?: string };
     expect(response.status).toBe(200);
     expect(payload.ok).toBe(true);
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('rejects a filePath that escapes the workspace root in the symbol tools', async () => {
+    const { baseUrl, close } = await startServer(fixtureWorkspaceRoot);
+    // Exists on disk but lives outside the fixture workspace.
+    const outsideAbsolute = resolve(process.cwd(), 'package.json');
+    const outsideRelative = '../../../../package.json';
+
+    for (const [tool, extra] of [
+      ['getFileOutline', {}],
+      ['getSymbolContent', { symbol: 'name' }],
+      ['findReferences', { symbol: 'name' }],
+      ['dependencyGraph', {}]
+    ] as const) {
+      for (const filePath of [outsideAbsolute, outsideRelative]) {
+        const { payload } = await postJson(`${baseUrl}/tools/${tool}`, { workspaceRoot: fixtureWorkspaceRoot, filePath, ...extra });
+        expect(payload.ok, `${tool} ${filePath}`).toBe(false);
+        expect(String(payload.error), `${tool} ${filePath}`).toContain('path outside workspace root');
+      }
+    }
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('rejects browser cross-origin POSTs (Origin header) on tool and mcp endpoints', async () => {
+    const { baseUrl, close } = await startServer(fixtureWorkspaceRoot);
+    const body = { workspaceRoot: fixtureWorkspaceRoot, query: 'buildGreeting' };
+
+    const crossOriginTool = await postJson(`${baseUrl}/tools/searchText`, body, { origin: 'http://evil.example' });
+    expect(crossOriginTool.status).toBe(403);
+    expect(crossOriginTool.payload.error).toBe('forbidden origin');
+
+    const crossOriginMcp = await postJson(`${baseUrl}/mcp`, { jsonrpc: '2.0', id: 1, method: 'tools/list' }, { origin: 'http://evil.example' });
+    expect(crossOriginMcp.status).toBe(403);
+
+    // A DNS-rebinding page carries the attacker origin even though the request reaches 127.0.0.1.
+    const rebinding = await postJson(`${baseUrl}/tools/searchText`, body, { origin: 'http://attacker.example:4545', host: 'attacker.example:4545' });
+    expect(rebinding.status).toBe(403);
+
+    const sameOrigin = await postJson(`${baseUrl}/tools/searchText`, body, { origin: baseUrl });
+    expect(sameOrigin.status).toBe(200);
+
+    const localhostOrigin = await postJson(`${baseUrl}/tools/searchText`, body, { origin: baseUrl.replace('127.0.0.1', 'localhost') });
+    expect(localhostOrigin.status).toBe(200);
+
+    // Non-browser clients (IDEs, curl, node fetch) send no Origin header and must keep working.
+    const noOrigin = await postJson(`${baseUrl}/tools/searchText`, body);
+    expect(noOrigin.status).toBe(200);
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('accepts extra origins listed in CODE_INTEL_ALLOWED_ORIGINS', async () => {
+    process.env.CODE_INTEL_ALLOWED_ORIGINS = 'http://ide.example; https://dashboard.example:8443';
+    const { baseUrl, close } = await startServer(fixtureWorkspaceRoot);
+    const body = { workspaceRoot: fixtureWorkspaceRoot, query: 'buildGreeting' };
+
+    expect((await postJson(`${baseUrl}/tools/searchText`, body, { origin: 'https://dashboard.example:8443' })).status).toBe(200);
+    expect((await postJson(`${baseUrl}/tools/searchText`, body, { origin: 'http://IDE.example/' })).status).toBe(200);
+    expect((await postJson(`${baseUrl}/tools/searchText`, body, { origin: 'http://evil.example' })).status).toBe(403);
 
     await close();
     runningServer = undefined;

@@ -214,7 +214,26 @@ function getPackageRoot(): string {
   return process.cwd();
 }
 
+let localAstGrepExecutableOverrideForTests: string | null | undefined;
+
+/**
+ * Force the local `node_modules/@ast-grep/cli/<binary>` lookup result in tests.
+ * That file only exists once @ast-grep/cli's postinstall has run (pnpm 10 blocks
+ * build scripts by default), so the fallback chain must not depend on disk state.
+ */
+export function setLocalAstGrepExecutableForTests(path: string | null): void {
+  localAstGrepExecutableOverrideForTests = path;
+}
+
+export function resetLocalAstGrepExecutableForTests(): void {
+  localAstGrepExecutableOverrideForTests = undefined;
+}
+
 function getLocalAstGrepExecutable(toolRoot: string): string | null {
+  if (localAstGrepExecutableOverrideForTests !== undefined) {
+    return localAstGrepExecutableOverrideForTests;
+  }
+
   const executableName = process.platform === 'win32' ? 'ast-grep.exe' : 'ast-grep';
   const executablePath = resolve(toolRoot, 'node_modules', '@ast-grep', 'cli', executableName);
   return existsSync(executablePath) ? executablePath : null;

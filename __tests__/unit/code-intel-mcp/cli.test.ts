@@ -40,12 +40,12 @@ function createDetachedChild(pid = 1234): ChildProcess {
 
 function createFetchMock(responses: Response[]): typeof fetch {
   const mock = vi.fn(() => Promise.resolve(responses.shift() ?? createJsonResponse(503, { ok: false, status: 'down' })));
-  return mock as unknown as typeof fetch;
+  return mock;
 }
 
 function createSpawnMock(child: ChildProcess): (command: string, args: readonly string[], options: object) => ChildProcess {
   const mock = vi.fn(() => child);
-  return mock as unknown as (command: string, args: readonly string[], options: object) => ChildProcess;
+  return mock;
 }
 
 let runningServer: Server | undefined;

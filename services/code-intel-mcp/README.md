@@ -190,7 +190,7 @@ When enabled, each request logs method, path, status, duration, request body, an
 - `CODE_INTEL_PORT` (default: `4545`)
 - `CODE_INTEL_API_KEY` (optional; when set, clients must send `x-api-key`)
 - `CODE_INTEL_MAX_BODY_BYTES` (default: `524288`)
-- `CODE_INTEL_SPAWN_TIMEOUT` (default: `5000`)
+- `CODE_INTEL_SPAWN_TIMEOUT` — per-child timeout in ms (defaults: `15000` for ripgrep, `30000` for ast-grep, `5000` for git and other helpers)
 - `CODE_INTEL_SPAWN_MAX_BUFFER` (default: `4194304`)
 - `CODE_INTEL_LOG_LEVEL` (default: `info`)
 

@@ -111,6 +111,13 @@ Owner: tooling-agent
 - Allow an explicit operator allowlist (`--allowed-workspace-root` / `CODE_INTEL_ALLOWED_WORKSPACE_ROOTS`) so a request workspaceRoot outside the default (e.g. a sibling git worktree) is authorized without weakening the default sandbox. Match canonical realpath; keep `..`/symlink escapes blocked.
 Status: done (2026-06-13)
 
+### T-017 Dependency refresh + light security review (2026-09)
+Owner: tooling-agent
+- Bump every dependency to its latest compatible version (runtime: typescript 6.0.3, @ast-grep/cli 0.45.3, zod, picomatch; dev: eslint 10, vitest 5, vite 8, typescript-eslint, @types/node 26; pnpm 10.34.5; GitHub Actions v7/v6; Docker base images), clear `pnpm audit`, fix the TS 6 `rootDir` build requirement, and de-flake the ast-grep fallback tests.
+- Light security review (path sandbox, subprocess execution, network/auth exposure, supply chain) with adversarial verification.
+- Verify end-to-end against the a private consumer codebase repository (HTTP tools, MCP over HTTP, MCP over stdio, packed-tarball consumer install) before publishing.
+Status: done (2026-09-04)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.

@@ -2,6 +2,33 @@
 
 All notable changes to this package are documented in this file.
 
+## 0.4.0 - 2026-09-04
+
+### Changed
+
+- **Dependency refresh — every dependency bumped to its latest compatible version.**
+  - Runtime: `typescript` 5.9.3 → **6.0.3** (the last JavaScript-based TypeScript; 7.x is the native Go compiler and ships no `createLanguageService` JS API, so it cannot back the symbol tools), `@ast-grep/cli` 0.40.5 → **0.45.3** (all seven platform binaries pinned to match), `zod` 4.3.6 → 4.5.4, `picomatch` 4.0.4 → 4.0.7.
+  - Dev/test toolchain: `eslint` 9 → **10.10**, `@eslint/js` 10, `typescript-eslint` 8.69, `globals` 17, `vitest` / `@vitest/coverage-v8` 4 → **5**, `vite` 7 → **8**, `@types/node` 24 → 26, `@types/picomatch` 4.0.3.
+  - Tooling: `packageManager` pnpm 10.28.2 → 10.34.5 (also in every workflow); GitHub Actions `actions/checkout`, `actions/setup-node`, `actions/upload-artifact` → v7 and `pnpm/action-setup` → v6 across all four workflows; Docker base images `node:24.20.0-alpine` and `alpine:3.23`.
+- Build: `tsconfig.build.json` now sets `rootDir: ./services` explicitly — TypeScript 6 refuses to infer it (TS5011). The published `dist/` layout, `bin` and `exports` paths are unchanged.
+
+### Security
+
+- **Light security review — four pre-existing issues fixed** (found by a 4-lens review with adversarial verification; none were introduced by the dependency bumps):
+  - **Arbitrary file read via `filePath` (high).** `findDefinitions` / `findReferences` / `findImplementations` / `findCallers` / `findCallees` / `getFileOutline` / `getSymbolContent` / `dependencyGraph` resolved `filePath` with `path.resolve()` and no boundary check, so an absolute path or `../` escaped the workspace and returned the outline or source of any readable file. `filePath` now goes through the same `assertWithinWorkspace` realpath + prefix check that `searchText` and `findDuplicates` already used, and answers `path outside workspace root`.
+  - **ripgrep flag injection via `searchText.query` (high).** The query was appended to the `rg` argv as a bare positional, so a query such as `--pre=./evil.sh` was parsed as an option — and `--pre` executes a program per searched file. The pattern is now passed with `-e` and options are terminated with `--` before the search paths.
+  - **git option injection via `findDuplicates.sinceGitRef` (medium).** A ref starting with `-` (e.g. `--output=<path>`) was passed straight to `git diff`, letting a caller write a file anywhere. The request schema now rejects values starting with `-`, and the service re-checks before spawning git.
+  - **No `Origin` validation on `POST /tools/*` and `POST /mcp` (medium).** Any web page in the developer's browser could issue a preflight-free JSON POST to the (by default unauthenticated) localhost server. Requests carrying an `Origin` header are now accepted only from the server's own origin or from `CODE_INTEL_ALLOWED_ORIGINS` (new env var, `*` to disable); clients that send no `Origin` (IDEs, agents, curl, Node) are unaffected.
+- **`pnpm audit` is fully clean** (was 13 high / 3 moderate, all in the dev toolchain: `brace-expansion`, `js-yaml`, `nanoid`, `postcss`, `@humanfs/node`). Overrides refreshed to the patched floors (`brace-expansion` ≥1.1.18 / ≥2.1.4, `postcss` ≥8.5.23, `js-yaml` ≥4.3.1, `nanoid` ≥3.3.18, `@humanfs/node` ≥0.16.8); the obsolete `picomatch` override was dropped because it broke `fdir`'s peer range now that the direct dependency is 4.0.7.
+
+### Fixed
+
+- **`impactedFiles` and `findDuplicates` no longer freeze the server on real repositories.** Their workspace walkers now skip hidden directories, nested git checkouts (a directory containing `.git`, e.g. worktrees under `.claude/worktrees/` or `.worktrees/`), `coverage/` and `.next/` — the same defaults ripgrep gives `searchText`. On a production Next.js repo the walk covered 66,563 files (a dozen nested worktrees plus ~110 MB of `.next/` bundles) and blocked the single-threaded server for over nine minutes per call; it now sees the ~4,000 real sources. Note: both engines still resolve relative imports only — `@/…` tsconfig path aliases are reported as external, so on alias-heavy codebases `dependencyGraph`/`impactedFiles` stay shallow.
+- **`searchText` silently used the Node fallback engine instead of ripgrep under pnpm.** The bundled binary lives in `@vscode/ripgrep-<platform>-<arch>`, an optional dependency of `@vscode/ripgrep` that pnpm's isolated layout only exposes to `@vscode/ripgrep` itself; resolving it from this package failed and the service degraded (correct results, but the slow regex walker). The binary is now resolved from `@vscode/ripgrep`'s own location (the way its `rgPath` does), with the legacy postinstall path as a last resort. A real-binary integration test now guards the engine choice.
+- `searchText` answered HTTP 500 `internal error` when ripgrep exceeded the spawn timeout (5 s by default; the first ripgrep launch from a fresh server takes ~5 s on Windows even though later searches take 0.2 s). The ripgrep default is now 15 s (ast-grep already used 30 s) and a timeout degrades to the Node engine with `engineFallbackReason: "ripgrep timed out…"`, the way `searchStruct` already reports an ast-grep timeout, and points at `CODE_INTEL_SPAWN_TIMEOUT`.
+- Tests: the ast-grep fallback-chain tests assumed `node_modules/@ast-grep/cli/ast-grep.exe` exists, but that file is only created by `@ast-grep/cli`'s postinstall, which pnpm 10 blocks by default — a fresh Windows install failed them. The local-binary lookup is now injectable in tests (`setLocalAstGrepExecutableForTests`), mirroring the bundled-binary seam, so the chain is asserted deterministically on every platform.
+- Lint under ESLint 10 / typescript-eslint 8.69: removed nine unnecessary type assertions, a dead initializer in the self-test, and two unused type imports. No behavior change.
+
 ## 0.3.7 - 2026-06-14
 
 ### Security

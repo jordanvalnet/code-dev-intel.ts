@@ -322,7 +322,12 @@ export const FindDuplicatesRequestSchema = z
     maxGroups: z.number().int().min(1).max(1000).optional(),
     includeIntraFile: z.boolean().optional(),
     mode: z.enum(['fast', 'balanced', 'strict']).optional(),
-    sinceGitRef: z.string().trim().min(1).optional(),
+    sinceGitRef: z
+      .string()
+      .trim()
+      .min(1)
+      .refine((value) => !value.startsWith('-'), { message: 'sinceGitRef must be a git revision, not an option' })
+      .optional(),
     outputFormat: z.enum(['json', 'markdown']).optional()
   })
   .strict();

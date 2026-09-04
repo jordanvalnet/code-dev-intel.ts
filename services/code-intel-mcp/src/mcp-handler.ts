@@ -243,7 +243,7 @@ async function processMcpToolCall(
   }
 
   try {
-    const toolExecution = await executeToolByName(name, (args as Record<string, unknown>) ?? {}, startupWorkspaceRoot);
+    const toolExecution = await executeToolByName(name, args ?? {}, startupWorkspaceRoot);
     const toolPayload = toolExecution.payload;
     const text = toolPayload.ok
       ? JSON.stringify(toolPayload.data)
