@@ -3,6 +3,7 @@ import { dirname, extname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 import { assertWithinWorkspace } from './safe-path.ts';
 import { HttpError } from './server-utils.ts';
+import { createImportResolver } from '../../indexer/src/import-resolver.ts';
 import type {
   CalleeEntry,
   CallerEntry,
@@ -496,46 +497,6 @@ function findBestDeclarationNode(sourceFile: ts.SourceFile, position: number): t
 
   visit(sourceFile);
   return candidate;
-}
-
-function resolveRelativeImportTarget(sourceFileAbsolute: string, specifier: string): string | null {
-  if (!specifier.startsWith('.')) {
-    return null;
-  }
-
-  const basePath = resolve(dirname(sourceFileAbsolute), specifier);
-  const extensionIndex = basePath.lastIndexOf('.');
-  const hasKnownRuntimeExtension = ['.js', '.jsx', '.mjs', '.cjs'].some((extension) =>
-    basePath.endsWith(extension)
-  );
-  const basePathWithoutExtension = hasKnownRuntimeExtension && extensionIndex > -1 ? basePath.slice(0, extensionIndex) : null;
-  const candidates = [
-    basePath,
-    ...(basePathWithoutExtension
-      ? [`${basePathWithoutExtension}.ts`, `${basePathWithoutExtension}.tsx`, `${basePathWithoutExtension}.d.ts`]
-      : []),
-    `${basePath}.ts`,
-    `${basePath}.tsx`,
-    `${basePath}.js`,
-    `${basePath}.jsx`,
-    join(basePath, 'index.ts'),
-    join(basePath, 'index.tsx'),
-    join(basePath, 'index.js'),
-    join(basePath, 'index.jsx')
-  ];
-
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) {
-      continue;
-    }
-
-    const stats = statSync(candidate);
-    if (stats.isFile()) {
-      return candidate;
-    }
-  }
-
-  return null;
 }
 
 function extractImportSpecifiers(fileContent: string): string[] {
@@ -1054,6 +1015,9 @@ export function getDependencyGraph(
   const normalizedRootFilePath = relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/');
 
   const { maxDepth, includeExternal } = resolveDependencyGraphOptions(options);
+  // Relative imports plus tsconfig/jsconfig `paths` and `baseUrl` aliases; anything
+  // unresolved (bare packages, node builtins) is reported as external.
+  const importResolver = createImportResolver(workspaceRoot);
 
   const queue: Array<{ absolutePath: string; depth: number }> = [{ absolutePath: resolvedFilePath, depth: 0 }];
   const visited = new Set<string>([resolvedFilePath]);
@@ -1078,7 +1042,7 @@ export function getDependencyGraph(
     const nextDepth = current.depth + 1;
 
     for (const specifier of currentImportSpecifiers) {
-      const internalTarget = resolveRelativeImportTarget(current.absolutePath, specifier);
+      const internalTarget = importResolver.resolve(current.absolutePath, specifier);
       if (!internalTarget) {
         handleExternalDependency({
           includeExternal,

@@ -48,6 +48,18 @@ export function isPathWithinWorkspace(workspaceRoot: string, candidatePath: stri
 }
 
 /**
+ * Same verdict as `isPathWithinWorkspace`, but bound to one workspace root that is
+ * canonicalized a single time. `canonicalizePath` realpaths the filesystem, so a
+ * caller that checks many candidates against the same root — every import target of
+ * a module graph, say — otherwise pays for resolving that one constant path again
+ * and again.
+ */
+export function createWorkspaceBoundaryCheck(workspaceRoot: string): (candidatePath: string) => boolean {
+  const rootCanonical = canonicalizePath(workspaceRoot);
+  return (candidatePath: string): boolean => isWithinBoundary(rootCanonical, canonicalizePath(candidatePath));
+}
+
+/**
  * Returns true if `candidatePath` matches any of the operator-configured glob
  * `patterns`. Both sides are normalized the same way the boundary check uses
  * (forward slashes, no trailing slash, lower-cased on win32), so an explicit

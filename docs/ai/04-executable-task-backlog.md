@@ -118,6 +118,13 @@ Owner: tooling-agent
 - Verify end-to-end against the a private consumer codebase repository (HTTP tools, MCP over HTTP, MCP over stdio, packed-tarball consumer install) before publishing.
 Status: done (2026-09-04)
 
+### T-018 tsconfig paths alias resolution
+Owner: tooling-agent
+- Resolve `compilerOptions.paths` / `baseUrl` aliases (e.g. `@/domain/ports/Port`) in both module-graph engines (`dependencyGraph` in services/code-intel-mcp, `impactedFiles`/`buildWorkspaceGraph` in services/indexer), which until 0.4.0 followed relative specifiers only and reported every alias as external.
+- Share one resolver (`services/indexer/src/import-resolver.ts`): load `tsconfig.json` (else `jsconfig.json`) with the TypeScript API (handles `extends`, comments, trailing commas, `pathsBasePath`), apply TypeScript precedence (exact key wins, else longest-prefix wildcard; matched pattern is terminal; `baseUrl` only when nothing matched), cache per workspace root on the mtimes of the whole `extends` chain, and reject any target outside `workspaceRoot`.
+- Keep the public API unchanged (`maxDepth`, `includeExternal`, `options.changedFiles`); bare packages and `node:` builtins stay external.
+Status: done (2026-09-04)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.

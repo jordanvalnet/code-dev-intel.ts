@@ -124,12 +124,13 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'dependencyGraph',
       endpoint: '/tools/dependencyGraph',
       description:
-        "Import/dependency graph rooted at a file (what it imports, transitively; internal and optionally external). Use for 'what does this file depend on' or to gauge coupling before a change, instead of opening files one by one to trace imports.",
+        "Import/dependency graph rooted at a file (what it imports, transitively; internal and optionally external). Resolves relative imports AND tsconfig/jsconfig path aliases (compilerOptions.paths / baseUrl, e.g. '@/domain/Port'), so alias-based codebases report real internal dependencies instead of treating every alias as external. Use for 'what does this file depend on' or to gauge coupling before a change, instead of opening files one by one to trace imports.",
       requiredRequestFields: ['workspaceRoot', 'filePath'],
       options: {
         maxDepth: {
           type: 'number',
           required: false,
+          default: 5,
           description: 'Maximum traversal depth for dependency expansion.'
         },
         includeExternal: {
@@ -144,7 +145,7 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'impactedFiles',
       endpoint: '/tools/impactedFiles',
       description:
-        'Blast-radius / impact analysis: given changed files, returns every file transitively impacted (direct and indirect importers). Use to scope a refactor or a review instead of manually tracing who imports what. Pass options.changedFiles as repo-relative paths.',
+        'Blast-radius / impact analysis: given changed files, returns every file transitively impacted (direct and indirect importers). Resolves relative imports AND tsconfig/jsconfig path aliases (compilerOptions.paths / baseUrl, e.g. `@/domain/Port`), so alias-based codebases report a real blast radius instead of an empty one. Use to scope a refactor or a review instead of manually tracing who imports what. Pass options.changedFiles as repo-relative paths.',
       requiredRequestFields: ['workspaceRoot'],
       options: {
         changedFiles: {

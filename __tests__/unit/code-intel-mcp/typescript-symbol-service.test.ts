@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import {
   getDependencyGraph,
   getFileOutline,
@@ -10,6 +12,17 @@ import {
 } from '../../../services/code-intel-mcp/src/typescript-symbol-service.ts';
 
 const fixtureRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
 
 describe('typescript-symbol-service', () => {
   it('finds definition across files', () => {
@@ -68,6 +81,27 @@ describe('typescript-symbol-service', () => {
     expect(result.edges.some((edge) => edge.from === 'src/dep-level2.ts' && edge.to === 'src/dep-level1.ts')).toBe(
       true
     );
+  });
+
+  it('dependency graph resolves tsconfig paths aliases as internal dependencies', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dev-intel-dependency-graph-alias-'));
+    tempDirs.push(root);
+    const write = (relativePath: string, content: string): void => {
+      const absolutePath = join(root, ...relativePath.split('/'));
+      mkdirSync(resolve(absolutePath, '..'), { recursive: true });
+      writeFileSync(absolutePath, content, 'utf8');
+    };
+    write('tsconfig.json', JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['./src/*'] } } }));
+    write('src/domain/ports/Port.ts', 'export interface Port {\n  run(): void;\n}\n');
+    write('src/adapters/Adapter.ts', "import type { Port } from '@/domain/ports/Port';\nimport { join } from 'node:path';\nexport class Adapter implements Port {\n  run() {\n    join('a', 'b');\n  }\n}\n");
+    write('src/app/main.ts', "import { Adapter } from '@/adapters/Adapter';\nexport const adapter = new Adapter();\n");
+
+    const result = getDependencyGraph(root, 'src/app/main.ts', { maxDepth: 3, includeExternal: true });
+
+    expect(result.dependencies).toEqual(['src/adapters/Adapter.ts', 'src/domain/ports/Port.ts']);
+    expect(result.externalDependencies).toEqual(['node:path']);
+    expect(result.edges).toContainEqual({ from: 'src/app/main.ts', to: 'src/adapters/Adapter.ts', kind: 'internal' });
+    expect(result.edges).toContainEqual({ from: 'src/adapters/Adapter.ts', to: 'src/domain/ports/Port.ts', kind: 'internal' });
   });
 
   describe('symbol-anchor resolution (regression: bugs #2 + #3)', () => {

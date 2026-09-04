@@ -44,8 +44,8 @@ Semantic (type-aware — no native grep/read equivalent):
 - `findCallers` / `findCallees` — incoming / outgoing call hierarchy
 - `getSymbolContent` — the source of one symbol, not the whole file
 - `getFileOutline` — a file's structure without reading it
-- `dependencyGraph` — a file's import graph
-- `impactedFiles` — blast radius of a set of changed files
+- `dependencyGraph` — a file's import graph (relative imports **and** `tsconfig`/`jsconfig` `paths`/`baseUrl` aliases)
+- `impactedFiles` — blast radius of a set of changed files (same alias-aware resolution)
 
 Search & analysis:
 
@@ -151,6 +151,18 @@ Use when you want call sites, usages, and cross-file impact.
 
 Use for interfaces, abstract contracts, and implementation discovery.
 
+### `findSymbol`
+
+Use when you know the symbol name but not the file it lives in — this removes the "grep for the name, then read the file" round trip. Takes `workspaceRoot` and `symbol`; no `filePath`.
+
+The query is matched exactly first; if nothing matches exactly the fuzzy (substring / camelCase) hits are returned instead, so a partial name still finds something. Matches inside `node_modules` and ambient `*.d.ts` files are excluded. Each match carries `name`, `kind`, `filePath`, the line/column range, and `containerName` when the symbol is nested.
+
+### `findCallers` / `findCallees`
+
+Call-hierarchy questions: `findCallers` answers "who calls this", `findCallees` answers "what does this call". Both take `workspaceRoot`, `filePath`, and `symbol`, and resolve through the type-checker rather than by name matching.
+
+Prefer these over `findReferences` when the call graph is what you actually want: references also include imports, type positions, and re-exports, while the call hierarchy returns real call sites with the caller/callee symbol next to each one.
+
 ### `getFileOutline`
 
 Use before reading a large file. This is the fastest way to understand the file structure.
@@ -171,6 +183,23 @@ Options:
 ### `dependencyGraph`
 
 Use when you need import relationships and transitive module dependencies.
+
+Options:
+
+- `maxDepth: number` (default `5`) — how many import hops to expand from the root file.
+- `includeExternal: boolean` (default `false`) — also report package and node-builtin imports. Internal dependencies come back as repo-relative paths; external ones as the raw specifier.
+
+Imports are resolved both ways: relative specifiers, **and** the workspace `tsconfig.json` (or `jsconfig.json`) `compilerOptions.paths` / `baseUrl` aliases. Precedence follows TypeScript — an exact key wins, otherwise the wildcard pattern with the longest prefix, and its targets are tried in order. So `@/domain/ports/Port` is an internal dependency, not an external one. Anything that still does not resolve (bare packages, `node:` builtins) stays external, and a target that resolves outside the workspace root is rejected and reported as external too.
+
+### `impactedFiles`
+
+Use to scope a refactor, a review, or a test run: given the files you changed, it returns every file transitively impacted (direct and indirect importers), including the changed files themselves.
+
+Options:
+
+- `changedFiles: string[]` (required) — repo-relative paths of the changed files.
+
+The import graph behind it resolves the same alias forms as `dependencyGraph`, so an alias-only codebase reports a real blast radius instead of an empty one.
 
 ### `searchStruct`
 
@@ -195,6 +224,8 @@ Use for literal strings, comments, log messages, config keys, or partial identif
 The ripgrep binary is bundled via `@vscode/ripgrep`, so the tool works out of the box on Windows, macOS, and Linux without `rg` on the PATH. Override with `CODE_INTEL_RIPGREP_PATH` if needed.
 
 The result includes `engine: 'ripgrep' | 'node-fallback'` and (when falling back) `engineFallbackReason: string` so clients can debug why ripgrep was not used.
+
+`CODE_INTEL_SPAWN_TIMEOUT` (milliseconds, default `15000`) bounds the ripgrep run; a search that exceeds it is killed and degrades to the node engine with `engineFallbackReason` set, so a pathological pattern costs a slower response rather than a hung tool call.
 
 ### `findDefinitions` / `findReferences` / `findImplementations` filtering
 
@@ -439,6 +470,7 @@ pnpm build
 pnpm test:all
 pnpm mcp:self-test
 pnpm release:smoke
+pnpm audit --audit-level=high
 ```
 
 `release:smoke` is the most useful final check for the npm package because it validates the published package shape from a temporary consumer project.

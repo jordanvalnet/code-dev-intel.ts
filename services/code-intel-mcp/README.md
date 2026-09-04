@@ -344,7 +344,8 @@ Content-Type: application/json
 
 - `searchText` uses `ripgrep` when available and falls back to a Node implementation.
 - `searchText` supports `options.searchPath` (default: `.`).
-- `dependencyGraph` supports `options.maxDepth` and `options.includeExternal`.
+- `dependencyGraph` supports `options.maxDepth` (default 5) and `options.includeExternal` (default false).
+- `dependencyGraph` and `impactedFiles` resolve relative imports **and** `tsconfig`/`jsconfig` path aliases (`compilerOptions.paths` / `baseUrl`), so an alias like `@/domain/Port` is an internal edge. Targets resolving outside `workspaceRoot` are rejected and reported as external.
 - `getFileOutline` supports `options.symbolKinds` filtering.
 - `/health` stays lightweight (liveness + tool list + discovery links).
 - `/tools/describe` is machine-readable discovery and maps to MCP `tools/list` semantics.

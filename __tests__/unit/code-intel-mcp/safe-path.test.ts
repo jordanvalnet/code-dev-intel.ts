@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { assertWithinWorkspace, isPathWithinWorkspace } from '../../../services/code-intel-mcp/src/safe-path.ts';
+import {
+  assertWithinWorkspace,
+  createWorkspaceBoundaryCheck,
+  isPathWithinWorkspace
+} from '../../../services/code-intel-mcp/src/safe-path.ts';
 
 function createWorkspaceFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'dev-intel-safe-path-'));
@@ -35,5 +39,19 @@ describe('safe-path', () => {
 
     expect(isPathWithinWorkspace(workspaceRoot, insidePath)).toBe(true);
     expect(isPathWithinWorkspace(workspaceRoot, outsidePath)).toBe(false);
+  });
+
+  it('gives the same verdict when the root is canonicalized once up front', () => {
+    const workspaceRoot = createWorkspaceFixture();
+    const insidePath = resolve(workspaceRoot, 'src/file.ts');
+    const outsidePath = resolve(workspaceRoot, '../outside.ts');
+
+    const isWithinRoot = createWorkspaceBoundaryCheck(workspaceRoot);
+
+    expect(isWithinRoot(insidePath)).toBe(isPathWithinWorkspace(workspaceRoot, insidePath));
+    expect(isWithinRoot(outsidePath)).toBe(isPathWithinWorkspace(workspaceRoot, outsidePath));
+    expect(isWithinRoot(insidePath)).toBe(true);
+    expect(isWithinRoot(outsidePath)).toBe(false);
+    expect(isWithinRoot(workspaceRoot)).toBe(true);
   });
 });

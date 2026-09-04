@@ -954,6 +954,30 @@ describe('mcp skeleton server', () => {
     runningServer = undefined;
   });
 
+  it('describes the module-graph tools as resolving tsconfig path aliases', async () => {
+    const { baseUrl, close } = await startServer();
+
+    const response = await fetch(`${baseUrl}/tools/describe`);
+    const json = (await response.json()) as {
+      tools: Array<{ name: string; description: string; options?: Record<string, { default?: unknown }> }>;
+    };
+
+    // These descriptions are what an MCP client puts in front of the model: if they
+    // still claim relative-only resolution, agents keep avoiding the tools on the
+    // alias-heavy codebases the resolution was built for.
+    const dependencyGraph = json.tools.find((tool) => tool.name === 'dependencyGraph');
+    expect(dependencyGraph?.description).toContain('path aliases');
+    expect(dependencyGraph?.description).toContain('baseUrl');
+    expect(dependencyGraph?.options?.maxDepth?.default).toBe(5);
+
+    const impactedFiles = json.tools.find((tool) => tool.name === 'impactedFiles');
+    expect(impactedFiles?.description).toContain('path aliases');
+    expect(impactedFiles?.description).toContain('baseUrl');
+
+    await close();
+    runningServer = undefined;
+  });
+
   it('rejects invalid findDuplicates body with HTTP 400', async () => {
     const { baseUrl, close } = await startServer();
 
