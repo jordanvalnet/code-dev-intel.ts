@@ -9,15 +9,19 @@ import { ASSET_EXTENSION_LIST, DEFAULT_INCLUDE_ASSETS } from '../../indexer/src/
 /**
  * Both module-graph tools take this option under the same name, so the model learns it
  * once. The extension list is spelled out because the answer is only predictable if the
- * caller knows which files count as assets.
+ * caller knows which files count as assets; everything else — exact-filename resolution,
+ * why an asset is always a leaf, what `false` also drops — is in the README.
  */
-const assetOptionDescription =
-  `Treat imported non-code files as graph nodes (${ASSET_EXTENSION_LIST}). ` +
-  'They are resolved by exact filename only — no extension guessing, no directory index — ' +
-  'and are never parsed, so they are always leaves and never a source of edges. ' +
-  `Default ${String(DEFAULT_INCLUDE_ASSETS)}: a changed stylesheet or JSON fixture really does ` +
-  'impact the code that imports it. Set false for a code-only graph, which also drops asset ' +
-  'imports from the unresolved report.';
+const assetOptionDescription = `Imported non-code files count as leaf nodes: ${ASSET_EXTENSION_LIST}`;
+
+/**
+ * Both module-graph tools resolve specifiers the same way, so they say it in the same
+ * words, once. Everything this clause compresses (the `extends` chain, the .mts/.cts
+ * family, directory imports, the root-config fallback) is in the README.
+ */
+const resolutionClause =
+  "Resolution is tsc's own, from the nearest tsconfig/jsconfig: path aliases (paths/baseUrl), " +
+  'package exports, workspace packages.';
 
 export function createHealthPayload(): HealthResponse {
   return {
@@ -50,6 +54,13 @@ const RESOLUTION_OPTIONS = {
 // Every advertised tool genuinely works. Descriptions follow the formula
 // [what it returns] · [use-when trigger] · [instead of which built-in] · [token/precision benefit]
 // so an agent has a concrete reason to prefer this over reflexive Grep/Glob/Read.
+//
+// An MCP client injects every one of these strings into the model's context on EVERY
+// session, so length here is a recurring cost paid by the users of a tool whose whole
+// point is token economy. Budget: <= 480 characters per tool description, <= 160 per
+// option description. Anything that does not change what the model DOES — enumerations
+// of import forms, the reason-by-reason glossary, worked examples — belongs in the
+// README, which a model can read on demand and only once.
 export function createToolsDescribePayload(): ToolsDescribeResponse {
   const tools: ToolDescriptor[] = [
     {
@@ -138,7 +149,10 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'dependencyGraph',
       endpoint: '/tools/dependencyGraph',
       description:
-        "Import/dependency graph rooted at a file (what it imports, transitively; internal and optionally external). Covers every static form — imports and re-exports (including `export * as ns from`), `import x = require()`, type-position `import('./m').T` (and JSDoc `@type {import('./m')}` in JavaScript), and `import()` / `require()` calls anywhere in the file — resolved the way tsc resolves them from the NEAREST tsconfig/jsconfig: relative paths, path aliases (compilerOptions.paths / baseUrl, e.g. '@/domain/Port'), package main/exports, the .mts/.cts/.mjs/.cjs family, and workspace packages symlinked into node_modules. Imported non-code files (stylesheets, icons, JSON…) are listed as leaf dependencies too; set options.includeAssets false for a code-only graph. Anything it cannot follow is reported instead of dropped: `unresolved` lists up to 20 entries as { from, specifier, reason } and `unresolvedCount` counts them all, so unresolvedCount 0 means the graph is complete. The reasons are not-found (nothing on disk answers the specifier), unsupported-file-type (the file is there but this graph does not read that kind, e.g. .vue/.svelte/.wasm), outside-workspace (it resolves outside workspaceRoot and is never followed or read) and dynamic-specifier (a non-literal import()/require(), quoted back as source text). Packages and node builtins are external dependencies, never unresolved. Use for 'what does this file depend on' or to gauge coupling before a change, instead of opening files one by one to trace imports.",
+        'Import/dependency graph rooted at a file: what it imports, transitively (internal; external on request). ' +
+        resolutionClause +
+        ' Anything unfollowed is reported in `unresolved` with a reason; `unresolvedCount` 0 means the graph is complete. ' +
+        "Use for 'what does this file depend on' instead of Reading files to trace imports; options.includeAssets covers non-code imports.",
       requiredRequestFields: ['workspaceRoot', 'filePath'],
       options: {
         maxDepth: {
@@ -165,7 +179,10 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'impactedFiles',
       endpoint: '/tools/impactedFiles',
       description:
-        'Blast-radius / impact analysis: given changed files, returns every file transitively impacted (direct and indirect importers). Covers every static import form (imports, re-exports, `import x = require()`, type-position `import()`, `import()` / `require()` calls) resolved the way tsc resolves them from the nearest tsconfig/jsconfig — relative paths, path aliases (compilerOptions.paths / baseUrl, e.g. `@/domain/Port`), package main/exports, the .mts/.cts/.mjs/.cjs family, workspace packages symlinked into node_modules — so alias-based codebases report a real blast radius instead of an empty one. Changed non-code files count too: pass a stylesheet, a JSON fixture or an icon in options.changedFiles and you get the code that imports it (options.includeAssets false for a code-only graph). `unresolvedCount` (plus `unresolvedSample`, up to 10 entries of { from, specifier, reason }: not-found / unsupported-file-type / outside-workspace / dynamic-specifier) reports the specifiers the WHOLE workspace graph could not follow, not only those inside this impact set, because any one of them could have been a missing importer: 0 means no importer was missed that way, anything higher means this set may be short. Use to scope a refactor or a review instead of manually tracing who imports what. Pass options.changedFiles as repo-relative paths; add options.changedSymbolsByFile ({ "src/a.ts": ["ChangedExport"] }) to keep only the importers that use one of those exports.',
+        'Blast radius: every file transitively importing options.changedFiles (repo-relative; stylesheets and JSON too, options.includeAssets). ' +
+        resolutionClause +
+        ' Unfollowed specifiers are reported with a reason; `unresolvedCount` 0 means no importer was missed. ' +
+        'Use to scope a refactor or review, not hand-tracing importers; options.changedSymbolsByFile narrows by export name.',
       requiredRequestFields: ['workspaceRoot'],
       options: {
         changedFiles: {
@@ -186,7 +203,8 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
           },
           required: false,
           description:
-            'Optional map of repo-relative path -> the export names that changed in it, e.g. { "src/a.ts": ["ChangedExport"] }. Keeps only the importers that use one of those names. A re-export carries the change on under the name it republishes, so a barrel (`export * from`, `export { X as Y } from`) stays transparent instead of truncating the answer. A file listed in changedFiles with no entry here counts as changed in full.'
+            'Repo-relative path -> changed export names, e.g. { "src/a.ts": ["X"] }: keeps only importers using one; ' +
+            're-exports stay transparent. No entry = fully changed.'
         },
         includeAssets: {
           type: 'boolean',

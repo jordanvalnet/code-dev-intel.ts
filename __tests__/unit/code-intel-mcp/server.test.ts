@@ -1015,11 +1015,39 @@ describe('mcp skeleton server', () => {
     expect(impactedFiles?.description).toContain('baseUrl');
     expect(impactedFiles?.description).toContain('unresolvedCount');
 
-    // Every reason the payload can carry has to be spelled out, or the model has to
-    // guess what a non-zero count means.
-    for (const reason of ['not-found', 'unsupported-file-type', 'outside-workspace', 'dynamic-specifier']) {
-      expect(dependencyGraph?.description).toContain(reason);
-      expect(impactedFiles?.description).toContain(reason);
+    // Both tools have to say that an unfollowed specifier comes back with a reason and
+    // that a zero count means the answer is complete — that is what an agent acts on.
+    // The four reason names themselves are documented in the README: knowing them does
+    // not change the call the model makes, and they cost tokens in every session.
+    for (const description of [dependencyGraph?.description, impactedFiles?.description]) {
+      expect(description).toContain('reason');
+      expect(description).toContain('`unresolvedCount` 0 means');
+    }
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('keeps the module-graph tool descriptions within their token budget', async () => {
+    const { baseUrl, close } = await startServer();
+
+    const response = await fetch(`${baseUrl}/tools/describe`);
+    const json = (await response.json()) as {
+      tools: Array<{ name: string; description: string; options?: Record<string, { description: string }> }>;
+    };
+
+    // An MCP client injects these strings into the model's context on every session, so
+    // they are a recurring cost paid by every user of a tool whose point is token
+    // economy. These two are the ones that grew: the import-form enumeration, the
+    // reason-by-reason glossary and the examples belong in the README, which a model
+    // reads on demand and only once.
+    for (const toolName of ['dependencyGraph', 'impactedFiles']) {
+      const tool = json.tools.find((entry) => entry.name === toolName);
+
+      expect(tool?.description.length).toBeLessThanOrEqual(480);
+      for (const option of Object.values(tool?.options ?? {})) {
+        expect(option.description.length).toBeLessThanOrEqual(160);
+      }
     }
 
     await close();
