@@ -53,7 +53,7 @@ export function runIndexer(options: IndexerRunOptions): void {
       throw new Error('impacted mode requires --changed=<file1,file2,...>');
     }
 
-    const impactedFiles = calculateWorkspaceImpactedFiles({
+    const impact = calculateWorkspaceImpactedFiles({
       workspaceRoot: options.workspaceRoot,
       changedFiles,
       changedSymbolsByFile: options.changedSymbolsByFile
@@ -63,8 +63,11 @@ export function runIndexer(options: IndexerRunOptions): void {
       mode: 'impacted',
       changedFiles,
       changedCount: changedFiles.length,
-      impactedFiles,
-      impactedCount: impactedFiles.length
+      impactedFiles: impact.impactedFiles,
+      impactedCount: impact.impactedFiles.length,
+      // Non-zero means the graph has holes, so this impact set may be short.
+      unresolvedCount: impact.unresolvedCount,
+      unresolvedSample: impact.unresolvedSample
     });
 
     return;

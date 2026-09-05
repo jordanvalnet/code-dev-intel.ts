@@ -174,12 +174,49 @@ export interface DependencyEdge {
   kind: 'internal' | 'external';
 }
 
+/**
+ * Why a specifier produced no edge. Packages and node builtins are NOT unresolved —
+ * they are external dependencies — so every entry here is something the answer is
+ * missing: a file that should exist and does not (`not-found`), a file that does exist
+ * but of a kind this graph does not follow, such as a `.vue` or `.wasm` module
+ * (`unsupported-file-type`), a target the workspace boundary rules out
+ * (`outside-workspace`), or a specifier no static analysis can name
+ * (`dynamic-specifier`, e.g. ``import(`./locales/${lang}`)``).
+ */
+export type UnresolvedReason =
+  | 'not-found'
+  | 'unsupported-file-type'
+  | 'outside-workspace'
+  | 'dynamic-specifier';
+
+export interface UnresolvedDependency {
+  /** Workspace-relative path of the file the specifier is written in. */
+  from: string;
+  /** The specifier as written; for a non-literal `import()`/`require()`, its source text. */
+  specifier: string;
+  reason: UnresolvedReason;
+}
+
 export interface DependencyGraphResult {
   rootFilePath: string;
   maxDepth: number;
   dependencies: string[];
   externalDependencies: string[];
   edges: DependencyEdge[];
+  /** Distinct specifiers this graph could not follow, capped; `unresolvedCount` has the total. */
+  unresolved: UnresolvedDependency[];
+  unresolvedCount: number;
+}
+
+export interface ImpactedFilesResult {
+  impactedFiles: string[];
+  count: number;
+  /**
+   * Distinct specifiers the workspace graph could not follow. Each one is a possible
+   * missing importer, so a non-zero count means this impact set may be incomplete.
+   */
+  unresolvedCount: number;
+  unresolvedSample: UnresolvedDependency[];
 }
 
 export interface StructMatch {
@@ -248,9 +285,21 @@ export interface JsonRpcResponse {
 export type JsonSchemaPrimitiveType = 'string' | 'number' | 'boolean';
 
 export interface ToolOptionDescriptor {
-  type: JsonSchemaPrimitiveType | 'array';
+  type: JsonSchemaPrimitiveType | 'array' | 'object';
   items?: {
     type: JsonSchemaPrimitiveType;
+  };
+  /**
+   * Value shape of an `object` option used as an open map (`{ "src/a.ts": ["Foo"] }`).
+   * The MCP input schema is generated with `additionalProperties: false`, so an option
+   * a description tells the model to send must declare its shape here or a validating
+   * client will reject the very call the description asked for.
+   */
+  additionalProperties?: {
+    type: JsonSchemaPrimitiveType | 'array';
+    items?: {
+      type: JsonSchemaPrimitiveType;
+    };
   };
   required: boolean;
   default?: string | number | boolean | string[];

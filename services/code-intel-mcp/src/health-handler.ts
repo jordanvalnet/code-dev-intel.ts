@@ -4,6 +4,20 @@ import {
   type ToolDescriptor,
   type ToolsDescribeResponse
 } from './contracts.ts';
+import { ASSET_EXTENSION_LIST, DEFAULT_INCLUDE_ASSETS } from '../../indexer/src/asset-modules.ts';
+
+/**
+ * Both module-graph tools take this option under the same name, so the model learns it
+ * once. The extension list is spelled out because the answer is only predictable if the
+ * caller knows which files count as assets.
+ */
+const assetOptionDescription =
+  `Treat imported non-code files as graph nodes (${ASSET_EXTENSION_LIST}). ` +
+  'They are resolved by exact filename only — no extension guessing, no directory index — ' +
+  'and are never parsed, so they are always leaves and never a source of edges. ' +
+  `Default ${String(DEFAULT_INCLUDE_ASSETS)}: a changed stylesheet or JSON fixture really does ` +
+  'impact the code that imports it. Set false for a code-only graph, which also drops asset ' +
+  'imports from the unresolved report.';
 
 export function createHealthPayload(): HealthResponse {
   return {
@@ -124,7 +138,7 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'dependencyGraph',
       endpoint: '/tools/dependencyGraph',
       description:
-        "Import/dependency graph rooted at a file (what it imports, transitively; internal and optionally external). Resolves relative imports AND tsconfig/jsconfig path aliases (compilerOptions.paths / baseUrl, e.g. '@/domain/Port'), so alias-based codebases report real internal dependencies instead of treating every alias as external. Use for 'what does this file depend on' or to gauge coupling before a change, instead of opening files one by one to trace imports.",
+        "Import/dependency graph rooted at a file (what it imports, transitively; internal and optionally external). Covers every static form — imports and re-exports (including `export * as ns from`), `import x = require()`, type-position `import('./m').T` (and JSDoc `@type {import('./m')}` in JavaScript), and `import()` / `require()` calls anywhere in the file — resolved the way tsc resolves them from the NEAREST tsconfig/jsconfig: relative paths, path aliases (compilerOptions.paths / baseUrl, e.g. '@/domain/Port'), package main/exports, the .mts/.cts/.mjs/.cjs family, and workspace packages symlinked into node_modules. Imported non-code files (stylesheets, icons, JSON…) are listed as leaf dependencies too; set options.includeAssets false for a code-only graph. Anything it cannot follow is reported instead of dropped: `unresolved` lists up to 20 entries as { from, specifier, reason } and `unresolvedCount` counts them all, so unresolvedCount 0 means the graph is complete. The reasons are not-found (nothing on disk answers the specifier), unsupported-file-type (the file is there but this graph does not read that kind, e.g. .vue/.svelte/.wasm), outside-workspace (it resolves outside workspaceRoot and is never followed or read) and dynamic-specifier (a non-literal import()/require(), quoted back as source text). Packages and node builtins are external dependencies, never unresolved. Use for 'what does this file depend on' or to gauge coupling before a change, instead of opening files one by one to trace imports.",
       requiredRequestFields: ['workspaceRoot', 'filePath'],
       options: {
         maxDepth: {
@@ -138,6 +152,12 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
           required: false,
           default: false,
           description: 'Include package/external dependencies in result.'
+        },
+        includeAssets: {
+          type: 'boolean',
+          required: false,
+          default: DEFAULT_INCLUDE_ASSETS,
+          description: assetOptionDescription
         }
       }
     },
@@ -145,7 +165,7 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
       name: 'impactedFiles',
       endpoint: '/tools/impactedFiles',
       description:
-        'Blast-radius / impact analysis: given changed files, returns every file transitively impacted (direct and indirect importers). Resolves relative imports AND tsconfig/jsconfig path aliases (compilerOptions.paths / baseUrl, e.g. `@/domain/Port`), so alias-based codebases report a real blast radius instead of an empty one. Use to scope a refactor or a review instead of manually tracing who imports what. Pass options.changedFiles as repo-relative paths.',
+        'Blast-radius / impact analysis: given changed files, returns every file transitively impacted (direct and indirect importers). Covers every static import form (imports, re-exports, `import x = require()`, type-position `import()`, `import()` / `require()` calls) resolved the way tsc resolves them from the nearest tsconfig/jsconfig — relative paths, path aliases (compilerOptions.paths / baseUrl, e.g. `@/domain/Port`), package main/exports, the .mts/.cts/.mjs/.cjs family, workspace packages symlinked into node_modules — so alias-based codebases report a real blast radius instead of an empty one. Changed non-code files count too: pass a stylesheet, a JSON fixture or an icon in options.changedFiles and you get the code that imports it (options.includeAssets false for a code-only graph). `unresolvedCount` (plus `unresolvedSample`, up to 10 entries of { from, specifier, reason }: not-found / unsupported-file-type / outside-workspace / dynamic-specifier) reports the specifiers the WHOLE workspace graph could not follow, not only those inside this impact set, because any one of them could have been a missing importer: 0 means no importer was missed that way, anything higher means this set may be short. Use to scope a refactor or a review instead of manually tracing who imports what. Pass options.changedFiles as repo-relative paths; add options.changedSymbolsByFile ({ "src/a.ts": ["ChangedExport"] }) to keep only the importers that use one of those exports.',
       requiredRequestFields: ['workspaceRoot'],
       options: {
         changedFiles: {
@@ -155,6 +175,24 @@ export function createToolsDescribePayload(): ToolsDescribeResponse {
           },
           required: true,
           description: 'Repo-relative paths of the changed files to compute the impact set for.'
+        },
+        changedSymbolsByFile: {
+          type: 'object',
+          additionalProperties: {
+            type: 'array',
+            items: {
+              type: 'string'
+            }
+          },
+          required: false,
+          description:
+            'Optional map of repo-relative path -> the export names that changed in it, e.g. { "src/a.ts": ["ChangedExport"] }. Keeps only the importers that use one of those names. A re-export carries the change on under the name it republishes, so a barrel (`export * from`, `export { X as Y } from`) stays transparent instead of truncating the answer. A file listed in changedFiles with no entry here counts as changed in full.'
+        },
+        includeAssets: {
+          type: 'boolean',
+          required: false,
+          default: DEFAULT_INCLUDE_ASSETS,
+          description: assetOptionDescription
         }
       }
     },

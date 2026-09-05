@@ -1,344 +1,204 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { extname, join, normalize, relative } from 'node:path';
-import ts from 'typescript';
-import { createImportResolver } from './import-resolver.ts';
+import { normalize } from 'node:path';
+import type { UnresolvedDependency } from '../../code-intel-mcp/src/contracts.ts';
+import { isAssetPath } from './asset-modules.ts';
+import { getWorkspaceGraph, type ImportEdge, type WorkspaceGraph } from './workspace-graph-cache.ts';
 
-export interface ImportEdge {
-  sourceFile: string;
-  targetFile: string;
-  importedSymbols: string[];
-}
+export {
+  buildWorkspaceGraph,
+  getWorkspaceGraph,
+  shouldSkipDirectory,
+  type ImportEdge,
+  type WorkspaceGraph,
+  type WorkspaceGraphCacheStats,
+  type WorkspaceGraphOptions,
+  type WorkspaceGraphResult
+} from './workspace-graph-cache.ts';
 
-export interface WorkspaceGraph {
-  files: string[];
-  imports: ImportEdge[];
-  exportsByFile: Record<string, string[]>;
+export interface WorkspaceImpactResult {
+  impactedFiles: string[];
+  unresolvedCount: number;
+  unresolvedSample: UnresolvedDependency[];
 }
 
 export interface ImpactedFilesOptions {
   graph: WorkspaceGraph;
   changedFiles: string[];
   changedSymbolsByFile?: Record<string, string[]>;
-}
-
-const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
-// Same build/output directories searchText ignores: walking a Next.js `.next/` or a
-// coverage report (megabytes of minified JS) made impactedFiles block the server for minutes.
-const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git', 'dist', 'coverage', '.next']);
-
-/**
- * Directories the workspace walk must not enter. Mirrors ripgrep's defaults (which
- * `searchText` already inherits): hidden directories are skipped, and so is any nested
- * git checkout — e.g. worktrees kept under `.claude/worktrees/` or `.worktrees/`, which
- * otherwise multiply the graph by the number of worktrees (66k files on one real repo).
- */
-export function shouldSkipDirectory(name: string, absolutePath: string): boolean {
-  if (SKIPPED_DIRECTORIES.has(name) || name.startsWith('.')) {
-    return true;
-  }
-
-  return existsSync(join(absolutePath, '.git'));
+  /**
+   * Reverse edges, if the caller already has them. `buildWorkspaceGraph` keeps one per
+   * cached workspace, so the common path never rebuilds it; passing nothing rebuilds it
+   * from `graph.imports`, which is what a caller holding a hand-made graph wants.
+   */
+  reverseIndex?: Map<string, ImportEdge[]>;
 }
 
 function toPosixPath(value: string): string {
   return normalize(value).replaceAll('\\', '/');
 }
 
-function toRelativePosixPath(workspaceRoot: string, absolutePath: string): string {
-  return toPosixPath(relative(workspaceRoot, absolutePath));
-}
+function buildReverseIndex(imports: readonly ImportEdge[]): Map<string, ImportEdge[]> {
+  const reverseEdges = new Map<string, ImportEdge[]>();
 
-function listSourceFiles(workspaceRoot: string): string[] {
-  const result: string[] = [];
-
-  function walk(currentDir: string): void {
-    const entries = readdirSync(currentDir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const absolutePath = join(currentDir, entry.name);
-      if (entry.isDirectory()) {
-        if (!shouldSkipDirectory(entry.name, absolutePath)) {
-          walk(absolutePath);
-        }
-        continue;
-      }
-
-      if (!entry.isFile()) {
-        continue;
-      }
-
-      if (!DEFAULT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
-        continue;
-      }
-
-      result.push(toPosixPath(absolutePath));
-    }
-  }
-
-  walk(workspaceRoot);
-  return result;
-}
-
-interface FileImport {
-  importPath: string;
-  importedSymbols: string[];
-}
-
-/**
- * `.tsx` and `.jsx` must be parsed as JSX, otherwise `<T>` is read as a type assertion
- * and the parser resynchronizes past the statements this collects.
- */
-function scriptKindFor(fileName: string): ts.ScriptKind {
-  switch (extname(fileName).toLowerCase()) {
-    case '.tsx':
-      return ts.ScriptKind.TSX;
-    case '.jsx':
-      return ts.ScriptKind.JSX;
-    case '.js':
-      return ts.ScriptKind.JS;
-    default:
-      return ts.ScriptKind.TS;
-  }
-}
-
-/**
- * Binding names as the TARGET module knows them: `{ original as alias }` contributes
- * `original`, because that is the name `exportsByFile` records and the one
- * `changedSymbolsByFile` is expressed in. An inline `type` modifier is not part of the
- * name, so `{ type A }` contributes `A` — the parser has already separated the two.
- */
-function bindingSymbols(
-  elements: readonly ts.ImportSpecifier[] | readonly ts.ExportSpecifier[]
-): string[] {
-  return elements.map((element) => (element.propertyName ?? element.name).text);
-}
-
-function importClauseSymbols(clause: ts.ImportClause | undefined): string[] {
-  // `import './side-effect'` binds nothing, so it depends on the module as a whole.
-  if (!clause) {
-    return ['*'];
-  }
-
-  const symbols: string[] = [];
-  if (clause.name) {
-    symbols.push('default');
-  }
-
-  const bindings = clause.namedBindings;
-  if (bindings) {
-    if (ts.isNamespaceImport(bindings)) {
-      symbols.push('*');
+  for (const edge of imports) {
+    const importers = reverseEdges.get(edge.targetFile);
+    if (importers) {
+      importers.push(edge);
     } else {
-      symbols.push(...bindingSymbols(bindings.elements));
+      reverseEdges.set(edge.targetFile, [edge]);
     }
   }
 
-  return symbols.length > 0 ? symbols : ['*'];
-}
-
-function exportClauseSymbols(clause: ts.NamedExportBindings | undefined): string[] {
-  // `export * from 'x'` and `export * as ns from 'x'` both re-export everything.
-  if (!clause || ts.isNamespaceExport(clause)) {
-    return ['*'];
-  }
-
-  const symbols = bindingSymbols(clause.elements);
-  return symbols.length > 0 ? symbols : ['*'];
+  return reverseEdges;
 }
 
 /**
- * The file's import and re-export edges, read off TypeScript's own parse tree.
- *
- * This used to be a regex whose clause class excluded newlines, so every statement
- * Prettier had wrapped — the normal shape of an `import type { … }` list — was
- * invisible: on a formatted codebase the graph lost most of its edges and
- * `impactedFiles` answered without the adapters that implement a changed port. The same
- * regex also matched `from '…'` inside comments and string literals, inventing edges
- * that were never there. Parsing is exact on both counts and hands over binding names,
- * `default`, namespace bindings and inline `type` modifiers already separated — there is
- * no clause string left to re-split.
+ * What is known to have changed about one file's exports. `all` is the honest answer
+ * whenever nothing can be ruled out — a file the caller named without listing symbols,
+ * or a file whose own code consumes something that changed.
  */
-function extractImports(fileContent: string, fileName: string): FileImport[] {
-  const sourceFile = ts.createSourceFile(
-    fileName,
-    fileContent,
-    ts.ScriptTarget.Latest,
-    // Parent pointers cost time to set and nothing here walks upwards.
-    false,
-    scriptKindFor(fileName)
-  );
-  const imports: FileImport[] = [];
-
-  function collect(statements: readonly ts.Statement[]): void {
-    for (const statement of statements) {
-      if (ts.isImportDeclaration(statement) && ts.isStringLiteralLike(statement.moduleSpecifier)) {
-        imports.push({
-          importPath: statement.moduleSpecifier.text,
-          importedSymbols: importClauseSymbols(statement.importClause)
-        });
-        continue;
-      }
-
-      if (
-        ts.isExportDeclaration(statement) &&
-        statement.moduleSpecifier !== undefined &&
-        ts.isStringLiteralLike(statement.moduleSpecifier)
-      ) {
-        imports.push({
-          importPath: statement.moduleSpecifier.text,
-          importedSymbols: exportClauseSymbols(statement.exportClause)
-        });
-        continue;
-      }
-
-      // `declare module 'x' { import … }`: the old text scan saw these too.
-      if (ts.isModuleDeclaration(statement) && statement.body && ts.isModuleBlock(statement.body)) {
-        collect(statement.body.statements);
-      }
-    }
-  }
-
-  collect(sourceFile.statements);
-  return imports;
+interface ChangedExports {
+  all: boolean;
+  names: Set<string>;
 }
 
-function extractExports(fileContent: string): string[] {
-  const symbols = new Set<string>();
+/** Nothing about this module's exports can be ruled out. */
+const EVERYTHING: ChangedExports = { all: true, names: new Set() };
 
-  const declarationRegex = /export\s+(?:const|let|var|function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
-  let declarationMatch = declarationRegex.exec(fileContent);
-  while (declarationMatch) {
-    if (declarationMatch[1]) {
-      symbols.add(declarationMatch[1]);
-    }
-    declarationMatch = declarationRegex.exec(fileContent);
-  }
-
-  const listRegex = /export\s+\{([^}]*)\}/g;
-  let listMatch = listRegex.exec(fileContent);
-  while (listMatch) {
-    const rawEntries = (listMatch[1] ?? '').split(',').map((part) => part.trim()).filter(Boolean);
-    for (const entry of rawEntries) {
-      const aliasParts = entry.split(/\s+as\s+/i).map((part) => part.trim()).filter(Boolean);
-      const exportedName = aliasParts.length > 1 ? aliasParts[1] : aliasParts[0];
-      if (exportedName) {
-        symbols.add(exportedName);
-      }
-    }
-    listMatch = listRegex.exec(fileContent);
-  }
-
-  if (/export\s+default\s+/m.test(fileContent)) {
-    symbols.add('default');
-  }
-
-  return [...symbols];
-}
-
-export function buildWorkspaceGraph(workspaceRoot: string): WorkspaceGraph {
-  const absoluteFiles = listSourceFiles(workspaceRoot);
-  // Relative imports plus tsconfig/jsconfig `paths` and `baseUrl` aliases (e.g. `@/domain/x`).
-  const importResolver = createImportResolver(workspaceRoot);
-  const files = absoluteFiles.map((file) => toRelativePosixPath(workspaceRoot, file));
-  const imports: ImportEdge[] = [];
-  const exportsByFile: Record<string, string[]> = {};
-
-  for (const absolutePath of absoluteFiles) {
-    const filePath = toRelativePosixPath(workspaceRoot, absolutePath);
-    const content = readFileSync(absolutePath, 'utf8');
-
-    exportsByFile[filePath] = extractExports(content);
-
-    const fileImports = extractImports(content, absolutePath);
-    for (const fileImport of fileImports) {
-      const resolvedTarget = importResolver.resolve(absolutePath, fileImport.importPath);
-      if (!resolvedTarget) {
-        continue;
-      }
-
-      imports.push({
-        sourceFile: filePath,
-        targetFile: toRelativePosixPath(workspaceRoot, resolvedTarget),
-        importedSymbols: fileImport.importedSymbols
-      });
-    }
-  }
-
-  return {
-    files,
-    imports,
-    exportsByFile
-  };
-}
-
-function shouldMarkBySymbol(
-  edge: ImportEdge,
-  changedSymbolsByFile: Record<string, string[]> | undefined,
-  exportsByFile: Record<string, string[]>
-): boolean {
-  if (!changedSymbolsByFile) {
+/**
+ * Does this importer touch anything that changed? `*` covers a namespace import, a
+ * side-effect import, a `require()` and an `export * from`, all of which depend on
+ * whatever the module happens to have.
+ */
+function edgeCarriesChange(edge: ImportEdge, changed: ChangedExports): boolean {
+  // An asset exports nothing, so there is no symbol for the filter to decide on. A
+  // stylesheet or a JSON fixture that changed changed for everyone who imports it.
+  if (isAssetPath(edge.targetFile)) {
     return true;
   }
 
-  const changedSymbols = changedSymbolsByFile[edge.targetFile] ?? [];
-  if (changedSymbols.length === 0) {
-    return false;
-  }
-
-  if (edge.importedSymbols.includes('*')) {
+  if (changed.all || edge.importedSymbols.includes('*')) {
     return true;
   }
 
-  const availableExports = new Set(exportsByFile[edge.targetFile] ?? []);
-  for (const symbol of changedSymbols) {
-    if (!availableExports.has(symbol)) {
+  return edge.importedSymbols.some((symbol) => changed.names.has(symbol));
+}
+
+/**
+ * What now counts as changed in the IMPORTER.
+ *
+ * A re-export is transparent: `export { foo } from './impl'` republishes the very
+ * symbol that changed, so the change travels on by name and a barrel does not hide it —
+ * while `export { bar as renamed }` passes on nothing when only `foo` changed. Any
+ * other import means the importer USES the symbol in its own code, and no static
+ * analysis here can say which of its exports that affects, so all of them are suspect.
+ * The unsound direction — assuming an importer publishes nothing new — is what silently
+ * truncated an impact set at the first barrel.
+ */
+function propagatedChange(edge: ImportEdge, changed: ChangedExports): ChangedExports {
+  const reExports = edge.reExports;
+  if (reExports === undefined) {
+    return EVERYTHING;
+  }
+
+  const names = new Set<string>();
+  for (const { source, exported } of reExports) {
+    if (source !== '*') {
+      if (changed.all || changed.names.has(source)) {
+        names.add(exported);
+      }
       continue;
     }
 
-    if (edge.importedSymbols.includes(symbol)) {
-      return true;
-    }
-
-    if (symbol === 'default' && edge.importedSymbols.includes('default')) {
-      return true;
+    // `export * as ns from` collapses the whole module into one binding, so any change
+    // to it is a change to `ns`; plain `export *` lets the target's own names through.
+    if (exported !== '*') {
+      names.add(exported);
+    } else if (changed.all) {
+      return EVERYTHING;
+    } else {
+      for (const name of changed.names) {
+        names.add(name);
+      }
     }
   }
 
-  return false;
+  return { all: false, names };
 }
 
 export function calculateImpactedFiles(options: ImpactedFilesOptions): string[] {
-  const reverseEdges = new Map<string, ImportEdge[]>();
+  const reverseEdges = options.reverseIndex ?? buildReverseIndex(options.graph.imports);
+  const declaredChanges = options.changedSymbolsByFile;
 
-  for (const edge of options.graph.imports) {
-    const existing = reverseEdges.get(edge.targetFile) ?? [];
-    existing.push(edge);
-    reverseEdges.set(edge.targetFile, existing);
+  const changedExports = new Map<string, ChangedExports>();
+  const impacted = new Set<string>();
+  const queue: string[] = [];
+
+  /** Widen what is known about a file; report whether that actually added anything. */
+  function widen(file: string, addition: ChangedExports): boolean {
+    const known = changedExports.get(file);
+    if (!known) {
+      changedExports.set(file, {
+        all: addition.all,
+        // Whatever the caller declared about this file holds however it was reached.
+        names: new Set([...(declaredChanges?.[file] ?? []), ...addition.names])
+      });
+      return true;
+    }
+
+    if (known.all) {
+      return false;
+    }
+
+    if (addition.all) {
+      known.all = true;
+      return true;
+    }
+
+    let grew = false;
+    for (const name of addition.names) {
+      if (!known.names.has(name)) {
+        known.names.add(name);
+        grew = true;
+      }
+    }
+    return grew;
   }
 
-  const impacted = new Set(options.changedFiles.map((file) => toPosixPath(file)));
-  const queue = [...impacted];
+  for (const changedFile of options.changedFiles) {
+    const file = toPosixPath(changedFile);
+    const declared = declaredChanges?.[file];
+    impacted.add(file);
+    // No list for a file the caller says changed means the caller did not narrow it
+    // down, not that nothing in it changed.
+    changedExports.set(file, {
+      all: declared === undefined || declared.length === 0,
+      names: new Set(declared ?? [])
+    });
+    queue.push(file);
+  }
 
   while (queue.length > 0) {
     const current = queue.shift();
-    if (!current) {
+    if (current === undefined) {
       continue;
     }
 
-    const importers = reverseEdges.get(current) ?? [];
-    for (const importerEdge of importers) {
-      if (
-        !shouldMarkBySymbol(importerEdge, options.changedSymbolsByFile, options.graph.exportsByFile)
-      ) {
-        continue;
-      }
+    const changed = changedExports.get(current);
+    if (!changed) {
+      continue;
+    }
 
-      if (impacted.has(importerEdge.sourceFile)) {
+    for (const importerEdge of reverseEdges.get(current) ?? []) {
+      if (!edgeCarriesChange(importerEdge, changed)) {
         continue;
       }
 
       impacted.add(importerEdge.sourceFile);
-      queue.push(importerEdge.sourceFile);
+      // Re-queued only when something new is known about it, so a cycle settles instead
+      // of spinning: the sets only ever grow, and there are finitely many names.
+      if (widen(importerEdge.sourceFile, propagatedChange(importerEdge, changed))) {
+        queue.push(importerEdge.sourceFile);
+      }
     }
   }
 
@@ -349,14 +209,25 @@ export interface WorkspaceImpactRequest {
   workspaceRoot: string;
   changedFiles: string[];
   changedSymbolsByFile?: Record<string, string[]>;
+  /** Follow imports of non-code files, so a changed asset lists the code that uses it. */
+  includeAssets?: boolean;
 }
 
-export function calculateWorkspaceImpactedFiles(request: WorkspaceImpactRequest): string[] {
-  const graph = buildWorkspaceGraph(request.workspaceRoot);
-
-  return calculateImpactedFiles({
-    graph,
-    changedFiles: request.changedFiles.map((filePath) => toPosixPath(filePath)),
-    changedSymbolsByFile: request.changedSymbolsByFile
+export function calculateWorkspaceImpactedFiles(request: WorkspaceImpactRequest): WorkspaceImpactResult {
+  const { graph, reverseIndex } = getWorkspaceGraph(request.workspaceRoot, {
+    includeAssets: request.includeAssets
   });
+
+  return {
+    impactedFiles: calculateImpactedFiles({
+      graph,
+      reverseIndex,
+      changedFiles: request.changedFiles.map((filePath) => toPosixPath(filePath)),
+      changedSymbolsByFile: request.changedSymbolsByFile
+    }),
+    // Workspace-wide: any specifier the graph could not follow is a possibly missing
+    // importer, so the caller is told even though the answer itself is a subset.
+    unresolvedCount: graph.unresolvedCount,
+    unresolvedSample: graph.unresolvedSample
+  };
 }

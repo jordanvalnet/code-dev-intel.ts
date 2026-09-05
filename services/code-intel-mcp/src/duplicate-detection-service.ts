@@ -25,7 +25,7 @@ interface DuplicateWindow extends CachedDuplicateWindow {
 const YIELD_EVERY_OPERATIONS = 4000;
 
 const DEFAULT_EXCLUDE = ['**/.git/**', '**/node_modules/**', '**/dist/**', '**/coverage/**', '**/.next/**'];
-const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs']);
 
 function toUnixPath(value: string): string {
   return value.replaceAll('\\', '/');

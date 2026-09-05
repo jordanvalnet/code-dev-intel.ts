@@ -125,6 +125,15 @@ Owner: tooling-agent
 - Keep the public API unchanged (`maxDepth`, `includeExternal`, `options.changedFiles`); bare packages and `node:` builtins stay external.
 Status: done (2026-09-04)
 
+### T-019 Exhaustive module graph
+Owner: tooling-agent
+- Cover every statically resolvable dependency form in one shared extractor (`services/indexer/src/module-graph-extractor.ts`), read from a single parse per file: import/export clauses in all shapes, `export * as ns from`, `import x = require()`, `import()`/`require()` string literals anywhere in the file, `import()` in a type position, and JSDoc `import()` types in JavaScript. `dependencyGraph` and `impactedFiles` must not be able to disagree about the same repository.
+- Resolve with TypeScript's own `ts.resolveModuleName` from the **nearest** `tsconfig`/`jsconfig`, and never drop what cannot be resolved: results carry `unresolved`/`unresolvedCount` (`dependencyGraph`) and `unresolvedCount`/`unresolvedSample` (`impactedFiles`) with reasons `not-found`, `unsupported-file-type`, `outside-workspace`, `dynamic-specifier`. Packages and `node:` builtins stay external.
+- Treat imported non-code files as graph leaves behind `options.includeAssets` (default true), resolved by exact filename only.
+- Cache the workspace graph per root for the life of the process, with parses and resolutions invalidated by different signals, and share the per-file parse cache with `dependencyGraph`.
+- Keep additions to the public API additive and documented (`services/code-intel-mcp/src/contracts.ts`, `/tools/describe`, MCP `tools/list`, README).
+Status: done (2026-09-04)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.

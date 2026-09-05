@@ -44,8 +44,8 @@ Semantic (type-aware — no native grep/read equivalent):
 - `findCallers` / `findCallees` — incoming / outgoing call hierarchy
 - `getSymbolContent` — the source of one symbol, not the whole file
 - `getFileOutline` — a file's structure without reading it
-- `dependencyGraph` — a file's import graph (relative imports **and** `tsconfig`/`jsconfig` `paths`/`baseUrl` aliases)
-- `impactedFiles` — blast radius of a set of changed files (same alias-aware resolution)
+- `dependencyGraph` — a file's import graph (every static import form, imported assets included, resolved the way `tsc` resolves it, and it reports what it could not follow)
+- `impactedFiles` — blast radius of a set of changed files, code or asset (same resolution, same completeness report, cached between calls)
 
 Search & analysis:
 
@@ -188,8 +188,26 @@ Options:
 
 - `maxDepth: number` (default `5`) — how many import hops to expand from the root file.
 - `includeExternal: boolean` (default `false`) — also report package and node-builtin imports. Internal dependencies come back as repo-relative paths; external ones as the raw specifier.
+- `includeAssets: boolean` (default `true`) — follow imports of non-code files. See [Assets as leaves](#assets-as-leaves).
 
-Imports are resolved both ways: relative specifiers, **and** the workspace `tsconfig.json` (or `jsconfig.json`) `compilerOptions.paths` / `baseUrl` aliases. Precedence follows TypeScript — an exact key wins, otherwise the wildcard pattern with the longest prefix, and its targets are tried in order. So `@/domain/ports/Port` is an internal dependency, not an external one. Anything that still does not resolve (bare packages, `node:` builtins) stays external, and a target that resolves outside the workspace root is rejected and reported as external too.
+**Every static form is followed:**
+
+- `import` / `import type` clauses, `export … from`, `export * from`, `export * as ns from`
+- `import x = require('…')`
+- `import()` / `require()` calls with a string literal anywhere in the file — a nested closure, a class method, a `declare module` body
+- `import()` in a **type** position: `type X = import('./m').Y`, `typeof import('./m')`, a generic argument, a mapped type, a `declare global` member. A dependency named only in a type position still moves when its target moves.
+- JSDoc `@type {import('./m').T}` **in JavaScript files**, where JSDoc is the type system. In a `.ts` file the checker ignores JSDoc types, so neither does this.
+
+**Resolution is TypeScript's own** (`ts.resolveModuleName`), using the options of the **nearest** `tsconfig.json` / `jsconfig.json` walking up from the importing file — not just the workspace root's. That covers relative specifiers, `compilerOptions.paths` and `baseUrl` aliases with TypeScript's precedence, `extends` chains, package `main` / `exports` and directory imports, declaration-only modules, the `.mts` / `.cts` / `.mjs` / `.cjs` family, and workspace packages symlinked into `node_modules` (reported as the real file inside the workspace, not as a package). If a nested project redefines `paths` without re-declaring an alias the root config maps, the root config is tried as a fallback so the edge is not lost. Targets that resolve outside `workspaceRoot` are never followed. On a case-insensitive filesystem a mis-cased import (`./notifications/sender` for `Sender.ts`) resolves to the file's real on-disk name, so its importer joins the graph instead of pointing at a node nothing walked.
+
+**Completeness is reported, not assumed.** Whatever the graph could not follow comes back in `unresolved` (up to 20 entries of `{ from, specifier, reason }`) with the full tally in `unresolvedCount`:
+
+- `not-found` — a specifier that names a file and finds none: relative, absolute, alias-shaped, or `baseUrl`-shaped (`billing/invoice` when a `billing/` directory sits under `baseUrl`). A deleted module or a broken alias.
+- `unsupported-file-type` — the file is **there**, and this graph does not read that kind: `./Widget.vue`, `./engine.wasm`, `./Page.mdx`. A real dependency, reported as one, instead of being called missing.
+- `outside-workspace` — the target exists but lies outside `workspaceRoot`.
+- `dynamic-specifier` — a non-literal `import()` / `require()` argument, e.g. ``import(`./locales/${lang}`)``; the source text is quoted back.
+
+Packages and `node:` builtins are external dependencies, never "unresolved", so `unresolvedCount: 0` means the graph is complete.
 
 ### `impactedFiles`
 
@@ -197,9 +215,48 @@ Use to scope a refactor, a review, or a test run: given the files you changed, i
 
 Options:
 
-- `changedFiles: string[]` (required) — repo-relative paths of the changed files.
+- `changedFiles: string[]` (required) — repo-relative paths of the changed files. A changed file may be an asset: pass a stylesheet, a JSON fixture or an icon and you get the code that imports it.
+- `changedSymbolsByFile: Record<string, string[]>` (optional) — e.g. `{ "src/a.ts": ["ChangedExport"] }`, to keep only the importers that use one of those exports.
+- `includeAssets: boolean` (default `true`) — see [Assets as leaves](#assets-as-leaves).
 
-The import graph behind it resolves the same alias forms as `dependencyGraph`, so an alias-only codebase reports a real blast radius instead of an empty one.
+`changedSymbolsByFile` narrows the answer without truncating it:
+
+- **A re-export carries the change on.** `export * from './impl'` passes `foo` through as `foo`; `export { foo as publicFoo } from './impl'` passes it on as `publicFoo`. So a barrel is transparent, and the consumers behind it stay in the answer.
+- **Anything else is opaque.** A file that *uses* a changed symbol in its own code may have changed in any way, so all of its exports count as changed from there on.
+- **A file listed in `changedFiles` with no entry counts as changed in full** — no list means you did not narrow it down, not that nothing in it changed.
+- **Assets and modules with no readable exports are never filtered out.** An asset has no exports; a CommonJS module's `module.exports` is not on the parse tree. Missing knowledge is not evidence that nothing matches.
+
+The import graph behind it is built by the same extractor and resolver as `dependencyGraph`, so the two tools cannot disagree about the same repository. The result carries the same completeness signal: `unresolvedCount` plus an `unresolvedSample` of up to 10 entries, counted across the whole workspace rather than only inside the impact set — every one is a specifier that could have been a missing importer.
+
+### Assets as leaves
+
+Both module-graph tools follow imports of non-code files, under the same option name and the same rules. The extensions that count:
+
+```
+.css .scss .sass .less .json .svg .png .jpg .jpeg .gif .webp .avif .woff .woff2 .graphql .gql .md .txt .yaml .yml
+```
+
+Only the last extension matters, so `Button.module.css` is a `.css` asset.
+
+- **Resolved by exact filename, and nothing else.** No extension guessing, no directory index, no `node_modules` walk — `./button.css` resolves if and only if `button.css` sits next to the importer. Path aliases and `baseUrl` are substituted (so `@shared/icons/logo.svg` works), and a bundler query suffix is ignored (`./logo.svg?react` resolves `logo.svg`), but every candidate still has to be a file that exists. The graph never invents an asset edge. The single exception is `.json`, the one extension Node and every bundler append by themselves: `./data/fixture` resolves `fixture.json` if that file is there. `./button` never resolves `button.css`.
+- **Always a leaf.** Assets are never read, never parsed and never a source of edges, so a `.md` file whose fenced examples contain `import` statements contributes nothing. They do not appear in the workspace graph's `files` list either — only as the target of an edge.
+- **A changed asset lists its importers.** That is the point of the default: with `includeAssets: false`, `impactedFiles` for a changed stylesheet answers with the stylesheet alone, which is a confidently wrong answer rather than an incomplete one.
+- **Excluding them excludes them from the unresolved report too.** With `includeAssets: false` you asked for a code graph, so an asset import the graph did not follow is not a gap in what you asked for. With assets on, an asset import that names no file *is* reported as `not-found`, because it is genuinely broken.
+
+Cost, measured on a 4,000-file synthetic workspace with ~3,600 asset imports: turning assets on adds nothing to the build (they are resolved either way; the option filters the answer), adds ~0.6% to an `impactedFiles` response for a code change, and ~21% to a `dependencyGraph` response for a file that actually imports assets. Resolving them by exact filename is *cheaper* than leaving them to TypeScript's module resolution, which probes a dozen candidate paths per asset specifier and fails.
+
+### Workspace graph cache
+
+`impactedFiles` builds a graph of the whole workspace, which on a few thousand files takes seconds. That graph is now cached per workspace root for the life of the process, and every call re-walks the directory tree to decide what to reuse:
+
+- **Files** are stamped with `(mtime, size)` at parse time; only files whose stamp moved are re-read. A rename is detected as a removal plus an addition with the same stamp and reuses the parse instead of re-reading.
+- **Resolutions** depend on the whole workspace, not on one file — a new `b.ts` can shadow the `b.js` a specifier used to reach, and an alias edit moves every aliased edge at once. So anything that changes the *set* of files (including assets), or the content of any `tsconfig.json` / `jsconfig.json` / `package.json`, redoes all of them. The parses survive.
+- **Recently written files are always re-read.** Filesystem timestamps are quantized — measured here at 0.5–18.7 ms, with 358 of 500 same-length rewrites indistinguishable by `(mtime, size)` — so any file whose recorded mtime is within 2 s of when it was cached is read again rather than trusted. Edit a file and ask immediately, and you get the file you just saved.
+- **Bounded:** at most 50,000 tracked files across at most 16 workspace roots, least-recently-used roots evicted first.
+
+`dependencyGraph` shares the same per-file parse cache, so the two tools never parse the same file twice and still cannot disagree.
+
+Measured on the same 4,000-file workspace (medians): cold build 4.1 s; an unchanged workspace 180 ms; one file edited 221 ms; a file added, deleted or renamed, an alias changed or an asset added, 2.8–2.9 s. On this repository (73 files): 273 ms cold, 7 ms warm, and `dependencyGraph` at 18–24 ms per call against 48 ms before the shared parse cache. The directory walk is ~97% of a warm call.
 
 ### `searchStruct`
 

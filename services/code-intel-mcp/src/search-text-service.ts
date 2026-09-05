@@ -7,7 +7,7 @@ import { isCommandUnavailableError, isSpawnTimeoutError, safeSpawnSync } from '.
 import { collectWorkspaceFiles } from './file-collection.ts';
 import { logger } from './logger.ts';
 
-const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.json']);
+const DEFAULT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs', '.json']);
 const DEFAULT_MAX_RESULTS = 200;
 // The first ripgrep launch from a fresh server process costs ~5 s on Windows (binary cold
 // start / AV scan) even though later searches take ~0.2 s; 5 s tripped that systematically.

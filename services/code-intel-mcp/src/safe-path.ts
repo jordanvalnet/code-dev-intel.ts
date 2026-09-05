@@ -10,12 +10,30 @@ function normalizeForCompare(value: string): string {
   return normalized;
 }
 
+/**
+ * Symlinks resolved AND, on a case-insensitive filesystem, the casing the file really
+ * has on disk.
+ *
+ * `realpathSync` resolves symlinks but hands back the CALLER's spelling of every
+ * segment, so on Windows and macOS `src/Sender.ts` and `src/sender.ts` — one single
+ * file — canonicalize to two different strings. A module graph joins its edges to the
+ * files it walked by string, so a mis-cased import (which compiles and runs on those
+ * platforms, and is therefore common) would resolve to a node that does not exist and
+ * its importer would silently vanish from every impact set. `realpathSync.native` asks
+ * the operating system for the real name instead; it can fail on path shapes the JS
+ * implementation still handles, so that one stays as the fallback.
+ */
 function canonicalizePath(pathValue: string): string {
   const resolved = resolve(pathValue);
-  if (existsSync(resolved)) {
+  if (!existsSync(resolved)) {
+    return resolved;
+  }
+
+  try {
+    return realpathSync.native(resolved);
+  } catch {
     return realpathSync(resolved);
   }
-  return resolved;
 }
 
 function isWithinBoundary(rootPath: string, candidatePath: string): boolean {
@@ -48,15 +66,28 @@ export function isPathWithinWorkspace(workspaceRoot: string, candidatePath: stri
 }
 
 /**
- * Same verdict as `isPathWithinWorkspace`, but bound to one workspace root that is
- * canonicalized a single time. `canonicalizePath` realpaths the filesystem, so a
+ * Bound to one workspace root that is canonicalized a single time, this returns the
+ * canonical (realpath-resolved) form of a candidate that lies inside the workspace,
+ * and `null` for one that does not. `canonicalizePath` realpaths the filesystem, so a
  * caller that checks many candidates against the same root — every import target of
  * a module graph, say — otherwise pays for resolving that one constant path again
- * and again.
+ * and again; and a caller that needs the resolved target as well (a module symlinked
+ * into `node_modules` from inside the workspace) gets it without a second realpath.
  */
-export function createWorkspaceBoundaryCheck(workspaceRoot: string): (candidatePath: string) => boolean {
+export function createWorkspaceBoundaryResolver(
+  workspaceRoot: string
+): (candidatePath: string) => string | null {
   const rootCanonical = canonicalizePath(workspaceRoot);
-  return (candidatePath: string): boolean => isWithinBoundary(rootCanonical, canonicalizePath(candidatePath));
+  return (candidatePath: string): string | null => {
+    const candidateCanonical = canonicalizePath(candidatePath);
+    return isWithinBoundary(rootCanonical, candidateCanonical) ? candidateCanonical : null;
+  };
+}
+
+/** Same verdict as `isPathWithinWorkspace`, bound to one canonicalized workspace root. */
+export function createWorkspaceBoundaryCheck(workspaceRoot: string): (candidatePath: string) => boolean {
+  const resolveWithinWorkspace = createWorkspaceBoundaryResolver(workspaceRoot);
+  return (candidatePath: string): boolean => resolveWithinWorkspace(candidatePath) !== null;
 }
 
 /**

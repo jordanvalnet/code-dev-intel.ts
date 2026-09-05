@@ -5,6 +5,7 @@ import {
   FindDuplicatesRequestSchema,
   type FindDuplicatesResult,
   type FindSymbolResult,
+  type ImpactedFilesResult,
   ToolRequestBodySchema,
   type StructSearchResult,
   type TextSearchResult,
@@ -210,7 +211,7 @@ function createSymbolContentPayload(request: ToolRequest): ToolResponse {
   };
 }
 
-function createDependencyGraphPayload(request: ToolRequest): ToolResponse {
+function createDependencyGraphPayload(request: ToolRequest): ToolResponse<DependencyGraphResult> {
   if (!request.filePath) {
     return {
       ok: false,
@@ -220,7 +221,9 @@ function createDependencyGraphPayload(request: ToolRequest): ToolResponse {
         maxDepth: 0,
         dependencies: [],
         externalDependencies: [],
-        edges: []
+        edges: [],
+        unresolved: [],
+        unresolvedCount: 0
       },
       error: 'filePath is required for dependencyGraph'
     };
@@ -228,10 +231,13 @@ function createDependencyGraphPayload(request: ToolRequest): ToolResponse {
 
   const maxDepthOption = request.options?.maxDepth;
   const includeExternalOption = request.options?.includeExternal;
+  const includeAssetsOption = request.options?.includeAssets;
 
   const result = getDependencyGraph(request.workspaceRoot, request.filePath, {
     maxDepth: typeof maxDepthOption === 'number' ? maxDepthOption : undefined,
-    includeExternal: includeExternalOption === true
+    includeExternal: includeExternalOption === true,
+    // Absent means "use the shipped default", which is not the same as `false`.
+    includeAssets: typeof includeAssetsOption === 'boolean' ? includeAssetsOption : undefined
   });
 
   return {
@@ -294,7 +300,7 @@ function createFindSymbolPayload(request: ToolRequest): ToolResponse<FindSymbolR
   };
 }
 
-function createImpactedFilesPayload(request: ToolRequest): ToolResponse {
+function createImpactedFilesPayload(request: ToolRequest): ToolResponse<ImpactedFilesResult> {
   const changedFilesOption = request.options?.changedFiles;
   const changedFiles = Array.isArray(changedFilesOption)
     ? changedFilesOption.filter((item): item is string => typeof item === 'string')
@@ -304,7 +310,7 @@ function createImpactedFilesPayload(request: ToolRequest): ToolResponse {
     return {
       ok: false,
       tool: 'impactedFiles',
-      data: { impactedFiles: [], count: 0 },
+      data: { impactedFiles: [], count: 0, unresolvedCount: 0, unresolvedSample: [] },
       error: 'options.changedFiles (non-empty array of repo-relative paths) is required for impactedFiles'
     };
   }
@@ -314,17 +320,27 @@ function createImpactedFilesPayload(request: ToolRequest): ToolResponse {
     changedSymbolsOption && typeof changedSymbolsOption === 'object' && !Array.isArray(changedSymbolsOption)
       ? (changedSymbolsOption as Record<string, string[]>)
       : undefined;
+  const includeAssetsOption = request.options?.includeAssets;
 
-  const impacted = calculateWorkspaceImpactedFiles({
+  const impact = calculateWorkspaceImpactedFiles({
     workspaceRoot: request.workspaceRoot,
     changedFiles,
-    changedSymbolsByFile
+    changedSymbolsByFile,
+    // Absent means "use the shipped default", which is not the same as `false`.
+    includeAssets: typeof includeAssetsOption === 'boolean' ? includeAssetsOption : undefined
   });
 
   return {
     ok: true,
     tool: 'impactedFiles',
-    data: { impactedFiles: impacted, count: impacted.length }
+    data: {
+      impactedFiles: impact.impactedFiles,
+      count: impact.impactedFiles.length,
+      // Workspace-wide: each one is an edge the graph could not follow, so a non-zero
+      // count means this impact set may be missing importers.
+      unresolvedCount: impact.unresolvedCount,
+      unresolvedSample: impact.unresolvedSample
+    }
   };
 }
 
@@ -369,7 +385,8 @@ export function createToolPayload(
   | ToolResponse<DependencyGraphResult>
   | ToolResponse<FindCallersResult>
   | ToolResponse<FindCalleesResult>
-  | ToolResponse<FindSymbolResult> {
+  | ToolResponse<FindSymbolResult>
+  | ToolResponse<ImpactedFilesResult> {
   if (tool === 'findDefinitions' || tool === 'findReferences' || tool === 'findImplementations') {
     return createSymbolResolutionPayload(tool, request);
   }

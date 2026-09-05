@@ -143,42 +143,55 @@ afterEach(async () => {
   await new Promise<void>((resolve) => setTimeout(resolve, 300));
 });
 
+/**
+ * Three real `node --experimental-strip-types` processes, each of which type-strips the
+ * whole server graph before it does anything: on a cold Windows filesystem cache that
+ * is comfortably more than the suite's 15 s default, and the run then failed on the
+ * timeout rather than on anything about the CLI. The deadline here is generous on
+ * purpose — it exists to stop a hung process, not to measure startup.
+ */
+const CLI_INTEGRATION_TIMEOUT_MS = 90_000;
+
 describe('code-dev-intel CLI integration', () => {
-  it('ensure starts the server, status sees it healthy, and a second ensure is idempotent', async () => {
-    const port = await getAvailablePort();
-    const healthUrl = `http://127.0.0.1:${port}/health`;
+  it(
+    'ensure starts the server, status sees it healthy, and a second ensure is idempotent',
+    async () => {
+      const port = await getAvailablePort();
+      const healthUrl = `http://127.0.0.1:${port}/health`;
 
-    const ensureStarted = await runCliProcess([
-      'ensure',
-      '--workspaceRoot=.',
-      `--port=${port}`,
-      '--timeout=15000',
-      '--verbose'
-    ]);
+      const ensureStarted = await runCliProcess([
+        'ensure',
+        '--workspaceRoot=.',
+        `--port=${port}`,
+        '--timeout=15000',
+        '--verbose'
+      ]);
 
-    expect(ensureStarted.exitCode).toBe(0);
-    expect(ensureStarted.stderr).toBe('');
-    expect(ensureStarted.stdout).toContain('is ready');
+      expect(ensureStarted.exitCode).toBe(0);
+      expect(ensureStarted.stderr).toBe('');
+      expect(ensureStarted.stdout).toContain('is ready');
 
-    const pidMatch = /pid\s+(\d+)/i.exec(ensureStarted.stdout);
-    expect(pidMatch?.[1]).toBeDefined();
-    const pid = Number(pidMatch?.[1]);
-    expect(Number.isFinite(pid)).toBe(true);
-    trackedPids.add(pid);
+      const pidMatch = /pid\s+(\d+)/i.exec(ensureStarted.stdout);
+      expect(pidMatch?.[1]).toBeDefined();
+      const pid = Number(pidMatch?.[1]);
+      expect(Number.isFinite(pid)).toBe(true);
+      trackedPids.add(pid);
 
-    await waitForHealth(healthUrl);
+      await waitForHealth(healthUrl);
 
-    const statusResult = await runCliProcess(['status', `--port=${port}`]);
-    expect(statusResult.exitCode).toBe(0);
-    expect(statusResult.stdout).toContain('is healthy');
+      const statusResult = await runCliProcess(['status', `--port=${port}`]);
+      expect(statusResult.exitCode).toBe(0);
+      expect(statusResult.stdout).toContain('is healthy');
 
-    const ensureAgain = await runCliProcess([
-      'ensure',
-      '--workspaceRoot=.',
-      `--port=${port}`,
-      '--timeout=3000'
-    ]);
-    expect(ensureAgain.exitCode).toBe(0);
-    expect(ensureAgain.stdout).toContain('already healthy');
-  });
+      const ensureAgain = await runCliProcess([
+        'ensure',
+        '--workspaceRoot=.',
+        `--port=${port}`,
+        '--timeout=3000'
+      ]);
+      expect(ensureAgain.exitCode).toBe(0);
+      expect(ensureAgain.stdout).toContain('already healthy');
+    },
+    CLI_INTEGRATION_TIMEOUT_MS
+  );
 });

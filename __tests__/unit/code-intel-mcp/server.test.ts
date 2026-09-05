@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { startMcpSkeletonServer } from '../../../services/code-intel-mcp/src/server.ts';
 import * as astGrepService from '../../../services/code-intel-mcp/src/ast-grep-service.ts';
 import * as textSearchService from '../../../services/code-intel-mcp/src/search-text-service.ts';
+import { DEFAULT_INCLUDE_ASSETS } from '../../../services/indexer/src/asset-modules.ts';
 
 let runningServer: Server | undefined;
 
@@ -782,12 +783,17 @@ describe('mcp skeleton server', () => {
       data: {
         dependencies: string[];
         externalDependencies: string[];
+        unresolved: Array<{ from: string; specifier: string; reason: string }>;
+        unresolvedCount: number;
       };
     };
 
     expect(response.status).toBe(200);
     expect(json.ok).toBe(true);
     expect(json.data.dependencies).toContain('src/dep-level1.ts');
+    // The completeness report travels with the graph: nothing was dropped here.
+    expect(json.data.unresolved).toEqual([]);
+    expect(json.data.unresolvedCount).toBe(0);
     expect(json.data.dependencies).toContain('src/definitions.ts');
     expect(json.data.externalDependencies).toContain('node:path');
 
@@ -954,6 +960,37 @@ describe('mcp skeleton server', () => {
     runningServer = undefined;
   });
 
+  it('returns impacted files with their unresolved report through impactedFiles endpoint', async () => {
+    const { baseUrl, close } = await startServer();
+    const workspaceRoot = resolve(process.cwd(), 'services/code-intel-mcp/fixtures/self-test-workspace');
+
+    const response = await fetch(`${baseUrl}/tools/impactedFiles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workspaceRoot, options: { changedFiles: ['src/definitions.ts'] } })
+    });
+
+    const json = (await response.json()) as {
+      ok: boolean;
+      data: {
+        impactedFiles: string[];
+        count: number;
+        unresolvedCount: number;
+        unresolvedSample: Array<{ from: string; specifier: string; reason: string }>;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(json.ok).toBe(true);
+    expect(json.data.impactedFiles).toContain('src/usage.ts');
+    expect(json.data.count).toBe(json.data.impactedFiles.length);
+    expect(json.data.unresolvedCount).toBe(0);
+    expect(json.data.unresolvedSample).toEqual([]);
+
+    await close();
+    runningServer = undefined;
+  });
+
   it('describes the module-graph tools as resolving tsconfig path aliases', async () => {
     const { baseUrl, close } = await startServer();
 
@@ -969,10 +1006,95 @@ describe('mcp skeleton server', () => {
     expect(dependencyGraph?.description).toContain('path aliases');
     expect(dependencyGraph?.description).toContain('baseUrl');
     expect(dependencyGraph?.options?.maxDepth?.default).toBe(5);
+    // An agent must be able to read completeness off the result, so the contract that
+    // makes that possible is part of what the model is told.
+    expect(dependencyGraph?.description).toContain('unresolved');
 
     const impactedFiles = json.tools.find((tool) => tool.name === 'impactedFiles');
     expect(impactedFiles?.description).toContain('path aliases');
     expect(impactedFiles?.description).toContain('baseUrl');
+    expect(impactedFiles?.description).toContain('unresolvedCount');
+
+    // Every reason the payload can carry has to be spelled out, or the model has to
+    // guess what a non-zero count means.
+    for (const reason of ['not-found', 'unsupported-file-type', 'outside-workspace', 'dynamic-specifier']) {
+      expect(dependencyGraph?.description).toContain(reason);
+      expect(impactedFiles?.description).toContain(reason);
+    }
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('declares every option its own description tells the model to send', async () => {
+    const { baseUrl, close } = await startServer();
+
+    const describeResponse = await fetch(`${baseUrl}/tools/describe`);
+    const describeJson = (await describeResponse.json()) as {
+      tools: Array<{ name: string; description: string; options?: Record<string, { description: string }> }>;
+    };
+
+    const impactedFiles = describeJson.tools.find((tool) => tool.name === 'impactedFiles');
+    expect(impactedFiles?.description).toContain('changedSymbolsByFile');
+    expect(impactedFiles?.options?.changedSymbolsByFile).toBeDefined();
+
+    // The MCP input schema is generated with additionalProperties:false, so an option
+    // the description asks for but the schema omits is rejected by any client that
+    // validates arguments — the model would be told to make a call it cannot make.
+    const listResponse = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+    });
+    const listJson = (await listResponse.json()) as {
+      result: {
+        tools: Array<{
+          name: string;
+          description: string;
+          inputSchema: { properties: { options?: { properties: Record<string, unknown> } } };
+        }>;
+      };
+    };
+
+    for (const tool of listJson.result.tools) {
+      const declared = Object.keys(tool.inputSchema.properties.options?.properties ?? {});
+      for (const mentioned of tool.description.matchAll(/options\.([A-Za-z][A-Za-z0-9]*)/g)) {
+        expect(`${tool.name}: ${declared.join(', ')}`).toContain(mentioned[1] ?? '');
+      }
+    }
+
+    expect(
+      listJson.result.tools.find((tool) => tool.name === 'impactedFiles')?.inputSchema.properties.options?.properties
+        .changedSymbolsByFile
+    ).toMatchObject({ type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } } });
+
+    await close();
+    runningServer = undefined;
+  });
+
+  it('describes includeAssets and the extensions it covers on both module-graph tools', async () => {
+    const { baseUrl, close } = await startServer();
+
+    const response = await fetch(`${baseUrl}/tools/describe`);
+    const json = (await response.json()) as {
+      tools: Array<{
+        name: string;
+        description: string;
+        options?: Record<string, { default?: unknown; description: string }>;
+      }>;
+    };
+
+    for (const toolName of ['dependencyGraph', 'impactedFiles']) {
+      const tool = json.tools.find((entry) => entry.name === toolName);
+      const includeAssets = tool?.options?.includeAssets;
+
+      expect(includeAssets?.default).toBe(DEFAULT_INCLUDE_ASSETS);
+      // The model has to know which extensions count as assets to predict the answer.
+      expect(includeAssets?.description).toContain('.css');
+      expect(includeAssets?.description).toContain('.svg');
+      expect(includeAssets?.description).toContain('.json');
+      expect(tool?.description).toContain('includeAssets');
+    }
 
     await close();
     runningServer = undefined;

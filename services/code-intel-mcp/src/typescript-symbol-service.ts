@@ -3,7 +3,10 @@ import { dirname, extname, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 import { assertWithinWorkspace } from './safe-path.ts';
 import { HttpError } from './server-utils.ts';
+import { DEFAULT_INCLUDE_ASSETS, isAssetPath, isAssetSpecifier } from '../../indexer/src/asset-modules.ts';
 import { createImportResolver } from '../../indexer/src/import-resolver.ts';
+import { createUnresolvedCollector } from '../../indexer/src/module-graph-extractor.ts';
+import { getModuleFacts } from '../../indexer/src/workspace-graph-cache.ts';
 import type {
   CalleeEntry,
   CallerEntry,
@@ -21,7 +24,12 @@ import type {
   SymbolQueryResult
 } from './contracts.ts';
 
-const SUPPORTED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
+const SUPPORTED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs']);
+/**
+ * A dependency graph is read by an agent that pays per token: the count says how
+ * complete the answer is, this many entries say where to look.
+ */
+const DEPENDENCY_GRAPH_UNRESOLVED_LIMIT = 20;
 const DEFAULT_COMPILER_OPTIONS: ts.CompilerOptions = {
   allowJs: true,
   checkJs: false,
@@ -499,15 +507,11 @@ function findBestDeclarationNode(sourceFile: ts.SourceFile, position: number): t
   return candidate;
 }
 
-function extractImportSpecifiers(fileContent: string): string[] {
-  const info = ts.preProcessFile(fileContent, true, true);
-  return info.importedFiles.map((item) => item.fileName);
-}
-
-function resolveDependencyGraphOptions(options?: {
-  maxDepth?: number;
-  includeExternal?: boolean;
-}): { maxDepth: number; includeExternal: boolean } {
+function resolveDependencyGraphOptions(options?: DependencyGraphOptions): {
+  maxDepth: number;
+  includeExternal: boolean;
+  includeAssets: boolean;
+} {
   const maxDepth =
     typeof options?.maxDepth === 'number' && Number.isFinite(options.maxDepth)
       ? Math.max(1, Math.floor(options.maxDepth))
@@ -515,7 +519,8 @@ function resolveDependencyGraphOptions(options?: {
 
   return {
     maxDepth,
-    includeExternal: options?.includeExternal === true
+    includeExternal: options?.includeExternal === true,
+    includeAssets: options?.includeAssets ?? DEFAULT_INCLUDE_ASSETS
   };
 }
 
@@ -1006,18 +1011,45 @@ export function getSymbolContent(
   };
 }
 
+export interface DependencyGraphOptions {
+  maxDepth?: number;
+  includeExternal?: boolean;
+  /**
+   * Follow imports of non-code files (stylesheets, icons, JSON…). They are resolved by
+   * exact filename and never parsed, so they appear as leaves of the graph.
+   */
+  includeAssets?: boolean;
+}
+
 export function getDependencyGraph(
   workspaceRoot: string,
   filePath: string,
-  options?: { maxDepth?: number; includeExternal?: boolean }
+  options?: DependencyGraphOptions
 ): DependencyGraphResult {
   const resolvedFilePath = resolveTargetFilePath(workspaceRoot, filePath);
   const normalizedRootFilePath = relative(workspaceRoot, resolvedFilePath).replaceAll('\\', '/');
 
-  const { maxDepth, includeExternal } = resolveDependencyGraphOptions(options);
-  // Relative imports plus tsconfig/jsconfig `paths` and `baseUrl` aliases; anything
-  // unresolved (bare packages, node builtins) is reported as external.
+  const { maxDepth, includeExternal, includeAssets } = resolveDependencyGraphOptions(options);
+  // Relative, alias, package and workspace-package specifiers, resolved as `tsc` would
+  // from the nearest tsconfig/jsconfig. Packages and node builtins are external;
+  // anything that names a file and does not find one is reported, never dropped.
   const importResolver = createImportResolver(workspaceRoot);
+  const unresolved = createUnresolvedCollector(DEPENDENCY_GRAPH_UNRESOLVED_LIMIT);
+
+  // An asset is a leaf by definition — nothing is ever read out of one. Asked for the
+  // graph OF an asset, the honest answer is an empty one; parsing a `.md` whose fenced
+  // examples contain import statements would invent edges that do not exist.
+  if (isAssetPath(resolvedFilePath)) {
+    return {
+      rootFilePath: normalizedRootFilePath,
+      maxDepth,
+      dependencies: [],
+      externalDependencies: [],
+      edges: [],
+      unresolved: [],
+      unresolvedCount: 0
+    };
+  }
 
   const queue: Array<{ absolutePath: string; depth: number }> = [{ absolutePath: resolvedFilePath, depth: 0 }];
   const visited = new Set<string>([resolvedFilePath]);
@@ -1036,14 +1068,36 @@ export function getDependencyGraph(
       continue;
     }
 
-    const currentContent = readFileSync(current.absolutePath, 'utf8');
-    const currentImportSpecifiers = extractImportSpecifiers(currentContent);
+    // The same extractor `impactedFiles` uses — through the same per-file parse cache,
+    // so the two tools cannot disagree about which imports a file has and neither pays
+    // for a parse the other already did.
+    const facts = getModuleFacts(workspaceRoot, current.absolutePath);
     const currentRelativePath = relative(workspaceRoot, current.absolutePath).replaceAll('\\', '/');
     const nextDepth = current.depth + 1;
 
-    for (const specifier of currentImportSpecifiers) {
-      const internalTarget = importResolver.resolve(current.absolutePath, specifier);
-      if (!internalTarget) {
+    for (const { specifier } of facts.imports) {
+      const resolution = importResolver.resolveModule(current.absolutePath, specifier);
+
+      if (resolution.kind === 'asset') {
+        if (includeAssets) {
+          // A dependency, and a leaf: recorded as an edge but never expanded.
+          const assetRelativePath = relative(workspaceRoot, resolution.filePath).replaceAll('\\', '/');
+          dependencies.add(assetRelativePath);
+          addEdge(edgeSet, edges, currentRelativePath, assetRelativePath, 'internal');
+        }
+        continue;
+      }
+
+      if (resolution.kind === 'unresolved') {
+        // With assets excluded the caller asked for a code graph, so an asset import the
+        // graph did not follow is not a gap in the answer they asked for.
+        if (includeAssets || !isAssetSpecifier(specifier)) {
+          unresolved.add(currentRelativePath, specifier, resolution.reason);
+        }
+        continue;
+      }
+
+      if (resolution.kind === 'external') {
         handleExternalDependency({
           includeExternal,
           specifier,
@@ -1058,7 +1112,7 @@ export function getDependencyGraph(
       handleInternalDependency({
         workspaceRoot,
         currentRelativePath,
-        internalTarget,
+        internalTarget: resolution.filePath,
         dependencies,
         visited,
         queue,
@@ -1066,6 +1120,10 @@ export function getDependencyGraph(
         edgeSet,
         edges
       });
+    }
+
+    for (const dynamicSpecifier of facts.dynamicSpecifiers) {
+      unresolved.add(currentRelativePath, dynamicSpecifier, 'dynamic-specifier');
     }
   }
 
@@ -1076,6 +1134,8 @@ export function getDependencyGraph(
     maxDepth,
     dependencies: [...dependencies].sort((left, right) => left.localeCompare(right)),
     externalDependencies: [...externalDependencies].sort((left, right) => left.localeCompare(right)),
-    edges
+    edges,
+    unresolved: unresolved.sample,
+    unresolvedCount: unresolved.count
   };
 }

@@ -78,6 +78,10 @@ function createOptionInputSchema(descriptor: ToolOptionDescriptor): Record<strin
     optionSchema.items = descriptor.items;
   }
 
+  if (descriptor.type === 'object' && descriptor.additionalProperties) {
+    optionSchema.additionalProperties = descriptor.additionalProperties;
+  }
+
   if (descriptor.default !== undefined) {
     optionSchema.default = descriptor.default;
   }

@@ -10,7 +10,7 @@ export interface ChangeDetectorOptions {
   includeExtensions?: string[];
 }
 
-const DEFAULT_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.json'];
+const DEFAULT_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs', '.json'];
 
 export function isRelevantFile(filePath: string, includeExtensions = DEFAULT_EXTENSIONS): boolean {
   const extension = extname(filePath).toLowerCase();
