@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 import type { UnresolvedReason } from '../../code-intel-mcp/src/contracts.ts';
@@ -21,6 +21,39 @@ export type ModuleResolution =
       readonly reason: Exclude<UnresolvedReason, 'dynamic-specifier'>;
     };
 
+/**
+ * Every workspace path a resolution looked at, spelled the way the workspace walk
+ * spells one: relative to the root, posix separators, case-folded where the filesystem
+ * is. This is what lets a cache re-resolve one file instead of all of them — a
+ * specifier's answer can only move when one of these paths appears or disappears.
+ *
+ * It is the same evidence `tsserver` watches: TypeScript hands back the locations it
+ * probed and did not find, and the manifests it read, precisely so that a long-lived
+ * process can tell which file events invalidate which resolution.
+ */
+export interface SpecifierProvenance {
+  /** Workspace file the specifier landed on; absent for a package, a builtin or a hole. */
+  readonly target: string | undefined;
+  /**
+   * Paths probed and NOT found. Any one of them appearing is a file that outranks
+   * whatever answered — a `b.ts` written next to the `b.js` a specifier had settled for.
+   */
+  readonly failedLookups: readonly string[];
+  /** Files whose CONTENT steered the answer: the `package.json` a directory import read. */
+  readonly affecting: readonly string[];
+  /**
+   * Paths looked at as DIRECTORIES rather than files. What matters about these is
+   * whether anything lives under them, so a change anywhere below one counts.
+   */
+  readonly directoryProbes: readonly string[];
+}
+
+/** A verdict together with the evidence that would overturn it. */
+export interface ProvenancedResolution {
+  readonly resolution: ModuleResolution;
+  readonly provenance: SpecifierProvenance;
+}
+
 export interface ImportResolver {
   readonly workspaceRoot: string;
   /**
@@ -30,6 +63,12 @@ export interface ImportResolver {
    */
   resolveModule(sourceFileAbsolute: string, specifier: string): ModuleResolution;
   /**
+   * The same verdict, plus every workspace path the answer depended on. A caller that
+   * keeps resolutions between calls stores this and re-resolves only the files whose
+   * evidence a walk diff actually touched.
+   */
+  resolveModuleWithProvenance(sourceFileAbsolute: string, specifier: string): ProvenancedResolution;
+  /**
    * Every `tsconfig`/`jsconfig` this resolver has consulted so far, each one followed by
    * the files in its `extends` chain. A caller that caches a graph across calls stores
    * these and re-fingerprints them to find out whether resolution can be reused.
@@ -38,6 +77,43 @@ export interface ImportResolver {
 }
 
 const CONFIG_FILE_NAMES = ['tsconfig.json', 'jsconfig.json'];
+
+/**
+ * The two fields of `ts.resolveModuleName`'s result that carry the provenance. They are
+ * marked `@internal` in TypeScript's public typings — present on the runtime object,
+ * absent from `ts.ResolvedModuleWithFailedLookupLocations` — so the result is widened
+ * to this shape rather than cast blind, and both fields stay optional because
+ * TypeScript leaves them undefined when a lookup succeeded on its first probe.
+ *
+ * Verified against the installed typescript 6.0.3: a resolution that had to probe
+ * (`./b` reaching `b.js` past a missing `b.ts`, a directory import, a miss) carries
+ * `failedLookupLocations`, and a directory import through `package.json` carries
+ * `affectingLocations`. `import-resolver.test.ts` fails loudly if a future TypeScript
+ * stops populating them, because a silent loss here would make the graph cache blind
+ * to files arriving rather than merely slower.
+ */
+interface ResolutionProvenanceFields {
+  readonly failedLookupLocations?: readonly string[];
+  readonly affectingLocations?: readonly string[];
+}
+
+/** Where a resolution looked, before the paths are folded into the walk's spelling. */
+interface ProbeLog {
+  readonly failed: Set<string>;
+  readonly affecting: Set<string>;
+  readonly directories: Set<string>;
+}
+
+const EMPTY_PROVENANCE: SpecifierProvenance = Object.freeze({
+  target: undefined,
+  failedLookups: Object.freeze([]),
+  affecting: Object.freeze([]),
+  directoryProbes: Object.freeze([])
+});
+
+function createProbeLog(): ProbeLog {
+  return { failed: new Set(), affecting: new Set(), directories: new Set() };
+}
 
 const EXTERNAL: ModuleResolution = { kind: 'external' };
 const NOT_FOUND: ModuleResolution = { kind: 'unresolved', reason: 'not-found' };
@@ -366,10 +442,168 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
    * measured on a 4,000-file synthetic workspace, 19,721 of 27,420 specifiers were
    * repeats of one of 7,699 distinct questions.
    */
-  const resolutions = new Map<string, ModuleResolution>();
+  const resolutions = new Map<string, ProvenancedResolution>();
   // Config files consulted, plus their `extends` chains, in discovery order: a caller
   // that caches resolutions across calls re-fingerprints exactly this list.
   const consultedConfigSources = new Set<string>();
+
+  // Provenance is only useful if it is spelled exactly as the workspace walk spells a
+  // path, because the whole point is set membership against a walk diff. The walk folds
+  // case on win32 and reports paths relative to the root, so provenance does too.
+  const foldsCase = process.platform === 'win32';
+  const foldPath = (value: string): string => (foldsCase ? value.toLowerCase() : value);
+  const rootSpellings = [rootPosix, toPosixPath(canonicalRoot)];
+
+  /**
+   * Which entries of one `node_modules` directory are links, and where they really go.
+   * A workspace package is normally installed as a link back into the repository, so
+   * TypeScript probes (and resolves through) `node_modules/@scope/name/...` for files
+   * the walk will only ever report under `packages/name/...`. Without the rewrite this
+   * map provides, a file appearing in such a package would invalidate nothing.
+   *
+   * Built lazily, one `readdirSync` per `node_modules` directory actually probed, and
+   * only for the entries the directory says are links.
+   */
+  const nodeModulesLinks = new Map<string, Map<string, string>>();
+
+  function indexLink(index: Map<string, string>, name: string, absolutePath: string): void {
+    try {
+      index.set(name, toPosixPath(realpathSync(absolutePath)));
+    } catch {
+      // Broken link: nothing to rewrite to, and nothing the walk can see either.
+    }
+  }
+
+  function linkIndexFor(nodeModulesDirectory: string): Map<string, string> {
+    const cached = nodeModulesLinks.get(nodeModulesDirectory);
+    if (cached) {
+      return cached;
+    }
+
+    const index = new Map<string, string>();
+    nodeModulesLinks.set(nodeModulesDirectory, index);
+
+    let entries;
+    try {
+      entries = readdirSync(nodeModulesDirectory, { withFileTypes: true });
+    } catch {
+      // The overwhelmingly common case: `<some-directory>/node_modules` does not exist,
+      // and the resolver probed it only because that is how a package lookup walks up.
+      return index;
+    }
+
+    for (const entry of entries) {
+      const absolutePath = `${nodeModulesDirectory}/${entry.name}`;
+      if (entry.isSymbolicLink()) {
+        indexLink(index, entry.name, absolutePath);
+        continue;
+      }
+
+      // Scoped packages hide one level deeper: `node_modules/@scope/name` is the link.
+      if (entry.isDirectory() && entry.name.startsWith('@')) {
+        let scoped;
+        try {
+          scoped = readdirSync(absolutePath, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const inner of scoped) {
+          if (inner.isSymbolicLink()) {
+            indexLink(index, `${entry.name}/${inner.name}`, `${absolutePath}/${inner.name}`);
+          }
+        }
+      }
+    }
+
+    return index;
+  }
+
+  /**
+   * Re-express a path that runs through a `node_modules` directory as the path the walk
+   * would report, or `null` when the walk can never see it. A package that really lives
+   * in `node_modules` is not workspace source and no file event can make it so, which is
+   * why everything but a link back into the workspace is dropped rather than kept.
+   */
+  function throughNodeModulesLink(relativePath: string): string | null {
+    const segments = relativePath.split('/');
+    const index = segments.indexOf('node_modules');
+    if (index === -1) {
+      return relativePath;
+    }
+
+    const directory = `${rootPosix}/${segments.slice(0, index + 1).join('/')}`;
+    const links = linkIndexFor(directory);
+    if (links.size === 0) {
+      return null;
+    }
+
+    const first = segments[index + 1];
+    if (first === undefined) {
+      return null;
+    }
+
+    const scopedName = first.startsWith('@') ? `${first}/${segments[index + 2] ?? ''}` : first;
+    const target = links.get(scopedName);
+    if (target === undefined) {
+      return null;
+    }
+
+    const consumed = index + 1 + scopedName.split('/').length;
+    const rest = segments.slice(consumed);
+    return toWorkspaceRelative(rest.length === 0 ? target : `${target}/${rest.join('/')}`);
+  }
+
+  function toWorkspaceRelative(posixPath: string): string | null {
+    // The prefix is compared folded and cut UNFOLDED. `toLowerCase` is not
+    // length-preserving for every code point (U+0130 lowercases to two units), so
+    // slicing by the folded length would cut a root containing one in the wrong place
+    // and hand back a path the walk can never match — under-invalidation, silently.
+    for (const base of rootSpellings) {
+      if (posixPath.length < base.length || foldPath(posixPath.slice(0, base.length)) !== foldPath(base)) {
+        continue;
+      }
+      if (posixPath.length === base.length) {
+        return '';
+      }
+      if (posixPath[base.length] === '/') {
+        return posixPath.slice(base.length + 1);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * One probed path, in the walk's spelling, or `null` when the walk cannot see it —
+   * outside the workspace, or inside a real `node_modules`. Dropping those is not a
+   * shortcut: resolving one bare specifier probes two hundred such paths, none of which
+   * a workspace diff can ever contain.
+   */
+  function toWalkPath(pathLike: string): string | null {
+    const relativePath = toWorkspaceRelative(toPosixPath(pathLike));
+    if (relativePath === null || relativePath.length === 0) {
+      return null;
+    }
+
+    const rewritten = hasNodeModulesSegment(relativePath) ? throughNodeModulesLink(relativePath) : relativePath;
+    if (rewritten === null || rewritten.length === 0 || hasNodeModulesSegment(rewritten)) {
+      return null;
+    }
+
+    return foldPath(rewritten);
+  }
+
+  function record(into: Set<string>, pathLike: string): void {
+    const walkPath = toWalkPath(pathLike);
+    if (walkPath !== null) {
+      into.add(walkPath);
+    }
+  }
+
+  function recordAll(into: Set<string>, paths: readonly string[] | undefined): void {
+    for (const pathLike of paths ?? []) {
+      record(into, pathLike);
+    }
+  }
 
   /** Nearest `tsconfig.json`, else `jsconfig.json`, walking up to (and including) the root. */
   function findNearestConfigPath(startDirectory: string): string | null {
@@ -474,14 +708,22 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
    * and `unresolvedCount` still reports the graph as complete, which is the one failure
    * mode this release exists to end.
    */
-  function namesBaseUrlEntry(config: ResolutionConfig, specifier: string): boolean {
+  function namesBaseUrlEntry(config: ResolutionConfig, specifier: string, probe: ProbeLog): boolean {
     const baseUrl = config.options.baseUrl;
     if (baseUrl === undefined) {
       return false;
     }
 
     const firstSegment = specifier.split('/')[0];
-    return firstSegment !== undefined && firstSegment.length > 0 && existsSync(resolve(baseUrl, firstSegment));
+    if (firstSegment === undefined || firstSegment.length === 0) {
+      return false;
+    }
+
+    // The answer turns on whether anything lives at this path, so the path is recorded
+    // as a directory: a file appearing anywhere beneath it can change the verdict.
+    const candidate = resolve(baseUrl, firstSegment);
+    record(probe.directories, candidate);
+    return existsSync(candidate);
   }
 
   /**
@@ -491,21 +733,40 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
    * whether or not `node_modules` has been installed — reporting those would bury the
    * real breakages in noise.
    */
-  function classifyUnresolved(specifier: string, contexts: readonly ResolutionContext[]): ModuleResolution {
+  function classifyUnresolved(
+    specifier: string,
+    contexts: readonly ResolutionContext[],
+    probe: ProbeLog
+  ): ModuleResolution {
     if (specifier.startsWith('.') || specifier.startsWith('#') || isAbsolute(specifier)) {
       return NOT_FOUND;
     }
 
     const namesAWorkspaceFile = contexts.some(
       (context) =>
-        matchesPathPattern(context.config.pathPatterns, specifier) || namesBaseUrlEntry(context.config, specifier)
+        matchesPathPattern(context.config.pathPatterns, specifier) ||
+        namesBaseUrlEntry(context.config, specifier, probe)
     );
     return namesAWorkspaceFile ? NOT_FOUND : EXTERNAL;
   }
 
-  function resolveWith(context: ResolutionContext, sourceFileAbsolute: string, specifier: string): string | undefined {
-    return ts.resolveModuleName(specifier, toPosixPath(sourceFileAbsolute), context.config.options, ts.sys, context.cache)
-      .resolvedModule?.resolvedFileName;
+  function resolveWith(
+    context: ResolutionContext,
+    sourceFileAbsolute: string,
+    specifier: string,
+    probe: ProbeLog
+  ): string | undefined {
+    const resolved: ts.ResolvedModuleWithFailedLookupLocations & ResolutionProvenanceFields = ts.resolveModuleName(
+      specifier,
+      toPosixPath(sourceFileAbsolute),
+      context.config.options,
+      ts.sys,
+      context.cache
+    );
+
+    recordAll(probe.failed, resolved.failedLookupLocations);
+    recordAll(probe.affecting, resolved.affectingLocations);
+    return resolved.resolvedModule?.resolvedFileName;
   }
 
   /**
@@ -580,7 +841,8 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
   function resolveAsset(
     sourceFileAbsolute: string,
     specifier: string,
-    contexts: readonly ResolutionContext[]
+    contexts: readonly ResolutionContext[],
+    probe: ProbeLog
   ): ModuleResolution {
     const target = withoutSpecifierQuery(specifier);
     if (target.length === 0) {
@@ -591,9 +853,12 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
       if (isFile(candidate)) {
         return classifyExistingFile(candidate);
       }
+      // The stylesheet an import names but nobody has written yet: the day it lands,
+      // this is the only record that says whose edges have to be worked out again.
+      record(probe.failed, candidate);
     }
 
-    return classifyUnresolved(target, contexts);
+    return classifyUnresolved(target, contexts, probe);
   }
 
   /**
@@ -605,12 +870,14 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
   function resolveMissingModule(
     sourceFileAbsolute: string,
     target: string,
-    contexts: readonly ResolutionContext[]
+    contexts: readonly ResolutionContext[],
+    probe: ProbeLog
   ): ModuleResolution {
     for (const candidate of candidateFilePaths(sourceFileAbsolute, target, contexts)) {
       if (isFile(candidate)) {
         return classifyExistingFile(candidate);
       }
+      record(probe.failed, candidate);
 
       // `.json` is the one extension every JavaScript resolver appends, so an existing
       // `data/fixture.json` really is the file `./data/fixture` names. Nothing else on
@@ -620,13 +887,14 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
         if (isFile(withJson)) {
           return classifyExistingFile(withJson);
         }
+        record(probe.failed, withJson);
       }
     }
 
-    return classifyUnresolved(target, contexts);
+    return classifyUnresolved(target, contexts, probe);
   }
 
-  function resolveUncached(sourceFileAbsolute: string, trimmed: string): ModuleResolution {
+  function resolveUncached(sourceFileAbsolute: string, trimmed: string, probe: ProbeLog): ModuleResolution {
     const nearest = contextForDirectory(dirname(sourceFileAbsolute));
     const rootConfigContext = contextForRoot();
     const contexts = rootConfigContext.key === nearest.key ? [nearest] : [nearest, rootConfigContext];
@@ -636,10 +904,10 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
     // it try first would classify the same kind of dependency two different ways —
     // and would hand a JSON file to the module parser as if it were code.
     if (isAssetSpecifier(trimmed)) {
-      return resolveAsset(sourceFileAbsolute, trimmed, contexts);
+      return resolveAsset(sourceFileAbsolute, trimmed, contexts, probe);
     }
 
-    const resolvedFileName = resolveWith(nearest, sourceFileAbsolute, trimmed);
+    const resolvedFileName = resolveWith(nearest, sourceFileAbsolute, trimmed, probe);
     if (resolvedFileName !== undefined) {
       return classifyResolvedFile(resolvedFileName);
     }
@@ -655,13 +923,53 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
       rootConfigContext.key !== nearest.key &&
       matchesPathPattern(rootConfigContext.config.pathPatterns, trimmed)
     ) {
-      const rootResolvedFileName = resolveWith(rootConfigContext, sourceFileAbsolute, trimmed);
+      const rootResolvedFileName = resolveWith(rootConfigContext, sourceFileAbsolute, trimmed, probe);
       if (rootResolvedFileName !== undefined) {
         return classifyResolvedFile(rootResolvedFileName);
       }
     }
 
-    return resolveMissingModule(sourceFileAbsolute, withoutSpecifierQuery(trimmed), contexts);
+    return resolveMissingModule(sourceFileAbsolute, withoutSpecifierQuery(trimmed), contexts, probe);
+  }
+
+  function resolveWithProvenance(sourceFileAbsolute: string, specifier: string): ProvenancedResolution {
+    const trimmed = specifier.trim();
+    if (trimmed.length === 0) {
+      return { resolution: NOT_FOUND, provenance: EMPTY_PROVENANCE };
+    }
+
+    // `node:`-prefixed names can only ever be builtins.
+    if (trimmed.startsWith('node:')) {
+      return { resolution: EXTERNAL, provenance: EMPTY_PROVENANCE };
+    }
+
+    const sourcePosix = toPosixPath(sourceFileAbsolute);
+    const separatorIndex = sourcePosix.lastIndexOf('/');
+    const directory = separatorIndex === -1 ? sourcePosix : sourcePosix.slice(0, separatorIndex);
+    const extension = extname(sourcePosix).toLowerCase();
+    // Length-prefixed rather than separated: a directory, an extension and a specifier
+    // can all contain whatever punctuation a separator might use.
+    const key = `${directory.length}:${extension.length}:${directory}${extension}${trimmed}`;
+    const cached = resolutions.get(key);
+    if (cached) {
+      return cached;
+    }
+
+    const probe = createProbeLog();
+    const resolution = resolveUncached(sourceFileAbsolute, trimmed, probe);
+    const target =
+      resolution.kind === 'internal' || resolution.kind === 'asset' ? toWalkPath(resolution.filePath) : null;
+    const entry: ProvenancedResolution = {
+      resolution,
+      provenance: {
+        target: target ?? undefined,
+        failedLookups: [...probe.failed],
+        affecting: [...probe.affecting],
+        directoryProbes: [...probe.directories]
+      }
+    };
+    resolutions.set(key, entry);
+    return entry;
   }
 
   return {
@@ -670,31 +978,10 @@ export function createImportResolver(workspaceRoot: string): ImportResolver {
       return [...consultedConfigSources];
     },
     resolveModule(sourceFileAbsolute: string, specifier: string): ModuleResolution {
-      const trimmed = specifier.trim();
-      if (trimmed.length === 0) {
-        return NOT_FOUND;
-      }
-
-      // `node:`-prefixed names can only ever be builtins.
-      if (trimmed.startsWith('node:')) {
-        return EXTERNAL;
-      }
-
-      const sourcePosix = toPosixPath(sourceFileAbsolute);
-      const separatorIndex = sourcePosix.lastIndexOf('/');
-      const directory = separatorIndex === -1 ? sourcePosix : sourcePosix.slice(0, separatorIndex);
-      const extension = extname(sourcePosix).toLowerCase();
-      // Length-prefixed rather than separated: a directory, an extension and a specifier
-      // can all contain whatever punctuation a separator might use.
-      const key = `${directory.length}:${extension.length}:${directory}${extension}${trimmed}`;
-      const cached = resolutions.get(key);
-      if (cached) {
-        return cached;
-      }
-
-      const result = resolveUncached(sourceFileAbsolute, trimmed);
-      resolutions.set(key, result);
-      return result;
+      return resolveWithProvenance(sourceFileAbsolute, specifier).resolution;
+    },
+    resolveModuleWithProvenance(sourceFileAbsolute: string, specifier: string): ProvenancedResolution {
+      return resolveWithProvenance(sourceFileAbsolute, specifier);
     }
   };
 }

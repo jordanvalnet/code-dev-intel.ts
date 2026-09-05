@@ -247,16 +247,42 @@ Cost, measured on a 4,000-file synthetic workspace with ~3,600 asset imports: tu
 
 ### Workspace graph cache
 
-`impactedFiles` builds a graph of the whole workspace, which on a few thousand files takes seconds. That graph is now cached per workspace root for the life of the process, and every call re-walks the directory tree to decide what to reuse:
+`impactedFiles` builds a graph of the whole workspace, which on a few thousand files takes seconds. That graph is cached per workspace root — in memory for the life of the process, and on disk between processes — and every call re-walks the directory tree to decide what to reuse:
 
-- **Files** are stamped with `(mtime, size)` at parse time; only files whose stamp moved are re-read. A rename is detected as a removal plus an addition with the same stamp and reuses the parse instead of re-reading.
-- **Resolutions** depend on the whole workspace, not on one file — a new `b.ts` can shadow the `b.js` a specifier used to reach, and an alias edit moves every aliased edge at once. So anything that changes the *set* of files (including assets), or the content of any `tsconfig.json` / `jsconfig.json` / `package.json`, redoes all of them. The parses survive.
+- **Files** are stamped with `(mtime, size)` at parse time; only files whose stamp moved are re-read. A rename is detected as a removal plus an addition with the same stamp, and the parse moves across once the content confirms it — a stamp is a hint (an archive restored with its timestamps produces the same one), so the bytes decide.
+- **Resolutions carry their evidence.** Every specifier records what its answer actually depended on: the file it landed on, every path TypeScript probed and did not find, the manifests TypeScript read, and any directory whose existence decided the verdict. When the walk reports files appearing or vanishing, a file is resolved again if and only if the change intersects that record — the rule a language server uses to decide which resolutions a file event invalidates. Adding a file to a 4,000-file workspace re-resolves one file instead of four thousand.
+  - The walk tracks directories as well as files, because `billing/gone` is an uninstalled package when nothing called `billing` exists under `baseUrl` and a lost workspace edge when something does — and an empty directory appearing or being removed is a change no file event reports.
+  - **What the walk cannot watch is never reused.** The walk does not enter `node_modules`, `dist`, `coverage`, `.next`, dot-directories or nested checkouts, and does not follow symlinks; the resolver reads all of them. A resolution that landed in, or probed inside, one of those places — a workspace package built into its own `dist/` after the first index — is therefore taken again on every call, as is any edge naming a file the walk does not report. `unwatchableFiles` in the cache stats is how many such files a workspace has (zero here).
+- **A config edit still redoes every resolution.** `compilerOptions.paths` moves every aliased edge at once, so a content change to any `tsconfig.json` / `jsconfig.json` / `package.json` re-resolves the workspace. Package manifests carry their own provenance and could in principle be narrowed the same way; they are not, because TypeScript records only the manifests a lookup actually read, and being wrong there would move edges in silence.
 - **Recently written files are always re-read.** Filesystem timestamps are quantized — measured here at 0.5–18.7 ms, with 358 of 500 same-length rewrites indistinguishable by `(mtime, size)` — so any file whose recorded mtime is within 2 s of when it was cached is read again rather than trusted. Edit a file and ask immediately, and you get the file you just saved.
+- **The graph survives the process.** Every editor or agent session spawns a fresh stdio server, so the cold build used to be paid once per session. After a call that changed anything, the workspace's graph — stamps, module facts, resolutions and their provenance — is written to the OS user cache directory (`%LOCALAPPDATA%\code-dev-intel\graph-cache\` on Windows, `$XDG_CACHE_HOME` or `~/.cache/code-dev-intel/graph-cache/` elsewhere), one file per workspace named by a digest of its root path. The next process loads it, then runs the same walk diff: stamps that still match are reused, everything else follows the rules above.
+  - **Never inside the workspace.** A cache file decides which files import which, so a repository that could ship one could plant edges an agent then acts on. It lives in the user's own cache directory, and it is read as untrusted input anyway — versions, root, and every field validated, every path required to be workspace-relative. Anything unexpected is a cold build, never a wrong graph.
+  - **Never a failure.** A read-only home directory or a full disk logs nothing into the tool call; the write is skipped and the process carries on. Writes are atomic (temp file plus rename), so a process killed mid-write leaves either the old file or the new one.
+  - **It stores no source.** Workspace-relative paths, `(mtime, size)` and a content digest per file, the specifiers each file imports and the names it exports, where each specifier resolved and the evidence behind it. Nothing in it can reconstruct a line of code.
+  - `CODE_INTEL_CACHE_DIR` moves the directory; `CODE_INTEL_GRAPH_CACHE=off` (or `false`, `0`, `no`) switches persistence off entirely. Cache files are invalidated by the package version, the TypeScript version and a schema version, so an upgrade never reuses answers the new resolver would not give — and the directory is swept on write (nothing older than 30 days, at most the 32 most recent workspaces), so it cannot grow one file per abandoned worktree forever.
 - **Bounded:** at most 50,000 tracked files across at most 16 workspace roots, least-recently-used roots evicted first.
 
 `dependencyGraph` shares the same per-file parse cache, so the two tools never parse the same file twice and still cannot disagree.
 
-Measured on the same 4,000-file workspace (medians): cold build 4.1 s; an unchanged workspace 180 ms; one file edited 221 ms; a file added, deleted or renamed, an alias changed or an asset added, 2.8–2.9 s. On this repository (73 files): 273 ms cold, 7 ms warm, and `dependencyGraph` at 18–24 ms per call against 48 ms before the shared parse cache. The directory walk is ~97% of a warm call.
+Measured on a large private consumer codebase (~4,200 files) and on a 4,000-file synthetic workspace. The real repository is the one that matters: a cold build there costs about 11 s, of which ~9 s is TypeScript's own module resolution, and **the first call of a new process now reads that graph back in ~1.1 s instead of building it**. Every editor or agent session spawns a fresh server, so that was the larger of the two costs.
+
+The synthetic workspace is where the per-event gains are visible, medians of 5 fresh processes each, both columns measured in one session on one (busy) machine — pre-T-020 build → this one:
+
+| | before | after |
+| --- | --- | --- |
+| cold build | 8,069 ms | 8,342 ms |
+| unchanged workspace | 399 ms | 380 ms |
+| one file edited | 417 ms | 454 ms |
+| **one file added** | 5,035 ms | **462 ms** |
+| **one file deleted** | 4,449 ms | **502 ms** |
+| **one file renamed** | 6,244 ms | **384 ms** |
+| **one asset added** | 5,535 ms | **415 ms** |
+| `tsconfig` alias edited | 5,055 ms | 5,843 ms |
+| **first call of a new process** | 8,342 ms (no such thing existed) | **1,113 ms** |
+
+The four bold rows in the middle are the common events of an agent's editing loop, and they were the most expensive ones — a file appearing or vanishing cost as much as a cold build. The `tsconfig` row stays a full re-resolution on purpose: an alias edit really does move every edge. The cold row is unchanged, so recording the evidence is free. The graph is identical in every row (3,986 files, 17,954 edges, 327 unresolved — the numbers the previous engine produced).
+
+Absolute timings depend heavily on what else the machine is doing: the same code measured 3.5 s for that cold build on an idle machine and 8.3 s here, so read the ratios rather than the milliseconds. The persisted file is 6.9 MB for the synthetic workspace (7.7 MB for the ~4,200-file repository, 89 KB for this one), read and validated field by field in 163–281 ms, and written in 94–411 ms on the calls that changed something — never on the calls that did not. Resident memory for the 4,000-file workspace is 213 MB, or 205 MB for a process that loads the graph instead of building it. On this repository (76 files): ~800 ms cold, 12–55 ms warm, 20–44 ms for the first call of a new process, and `dependencyGraph` at 18–24 ms per call. The directory walk is most of every warm call.
 
 ### `searchStruct`
 
@@ -346,7 +372,11 @@ The package can be exposed either as:
 
 - **`--workspaceRoot=.` is passed once at startup.** Do **not** pass `workspaceRoot` in individual tool calls — the startup value is applied automatically. (For VS Code, use `${workspaceFolder}`.)
 - **Deferred tools:** some clients load MCP tool schemas on demand. If the `mcp__code-intel__*` tools aren't visible yet, have the agent load them first (in Claude Code, via `ToolSearch`); the server's `initialize.instructions` also prompt their use.
-- **First call is slow, the rest are fast:** the first semantic call builds the TypeScript program (a few seconds on a large repo), then it's cached for the session.
+- **First call is slow, the rest are fast:** the first semantic call builds the TypeScript program (a few seconds on a large repo), then it's cached for the session. The *module graph* behind `impactedFiles` and `dependencyGraph` outlives the session: the first call of a new server reads the graph the last one left in your user cache directory, which on a 4,200-file repository is ~1 s instead of ~11 s.
+- **The module-graph cache lives outside the repository**, one file per workspace root, named by a digest of that path: `%LOCALAPPDATA%\code-dev-intel\graph-cache\` on Windows, `$XDG_CACHE_HOME/code-dev-intel/graph-cache/` (or `~/.cache/…`) elsewhere.
+  - `CODE_INTEL_CACHE_DIR=<dir>` puts it somewhere else — a scratch directory in CI, for instance.
+  - `CODE_INTEL_GRAPH_CACHE=off` (also `false`, `0`, `no`) turns it off: nothing is read, nothing is written, no directory is created. Every call then rebuilds from the process's own memory as before.
+  - **To clear it**, delete the directory (or the one `.json` file for your workspace); the next call rebuilds it. Nothing has to be told about it. Files older than 30 days, and everything past the 32 most recent workspaces, are swept on the next write.
 - **Reconnect after upgrading:** when you change the version or config, reconnect/restart the MCP server so the client reloads the tools and instructions.
 - **Working in a git worktree?** By default a request `workspaceRoot` must stay within the startup `--workspaceRoot`. To authorize a path outside it (e.g. a sibling git worktree), pass `--allowed-workspace-root=<glob>` (repeatable) or set `CODE_INTEL_ALLOWED_WORKSPACE_ROOTS` (comma/semicolon-separated globs) — e.g. `--workspaceRoot=. --allowed-workspace-root="/repos/myapp*"`. Patterns are matched against the canonical (realpath-resolved) path, so `..`/symlink escapes stay blocked; with no patterns configured, the strict default-boundary behavior is unchanged.
 

@@ -695,3 +695,147 @@ describe('import-resolver baseUrl-shaped specifiers', () => {
     expect(outcome(root, createImportResolver(root), from, 'billing/deleted')).toBe('external');
   });
 });
+describe('import-resolver resolution provenance', () => {
+  it('records the workspace file a specifier landed on, normalised the way the walk spells it', () => {
+    const root = createWorkspace();
+    write(root, 'src/a.ts', '');
+    write(root, 'src/logo.svg', '<svg />');
+    const from = write(root, 'src/main.ts', '');
+
+    const resolver = createImportResolver(root);
+
+    expect(resolver.resolveModuleWithProvenance(from, './a').provenance.target).toBe('src/a.ts');
+    expect(resolver.resolveModuleWithProvenance(from, './logo.svg').provenance.target).toBe('src/logo.svg');
+    // A package is not a workspace file, so nothing about it can be invalidated by the walk.
+    expect(resolver.resolveModuleWithProvenance(from, 'node:path').provenance.target).toBeUndefined();
+  });
+
+  it('records the paths TypeScript probed and did not find, so a shadowing file can be seen arriving', () => {
+    const root = createWorkspace();
+    write(root, 'src/b.js', 'export const b = 1;');
+    const from = write(root, 'src/main.ts', '');
+
+    const { resolution, provenance } = createImportResolver(root).resolveModuleWithProvenance(from, './b');
+
+    expect(resolution.kind).toBe('internal');
+    expect(provenance.target).toBe('src/b.js');
+    // `b.ts` outranks `b.js`: the day it appears this resolution has to be redone, and
+    // the only record that says so is the list of paths the resolver probed in vain.
+    expect(provenance.failedLookups).toContain('src/b.ts');
+  });
+
+  it('records probed paths for a specifier nothing answers', () => {
+    const root = createWorkspace();
+    const from = write(root, 'src/main.ts', '');
+
+    const { resolution, provenance } = createImportResolver(root).resolveModuleWithProvenance(from, './missing');
+
+    expect(resolution).toEqual({ kind: 'unresolved', reason: 'not-found' });
+    expect(provenance.failedLookups).toContain('src/missing.ts');
+    expect(provenance.failedLookups).toContain('src/missing/index.ts');
+  });
+
+  it('records the exact candidate an asset specifier names, hit or miss', () => {
+    const root = createWorkspace();
+    write(root, 'tsconfig.json', JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }));
+    write(root, 'src/widget.css', '.widget {}');
+    const from = write(root, 'src/main.ts', '');
+
+    const resolver = createImportResolver(root);
+
+    expect(resolver.resolveModuleWithProvenance(from, './widget.css').provenance.target).toBe('src/widget.css');
+    // A miss has to name the file it wanted, or the day someone adds it nothing notices.
+    const missing = resolver.resolveModuleWithProvenance(from, './widget-dark.css');
+    expect(missing.resolution).toEqual({ kind: 'unresolved', reason: 'not-found' });
+    expect(missing.provenance.failedLookups).toContain('src/widget-dark.css');
+    // Through an alias the substituted path is the one that is probed.
+    const aliased = resolver.resolveModuleWithProvenance(from, '@/theme/dark.css');
+    expect(aliased.provenance.failedLookups).toContain('src/theme/dark.css');
+  });
+
+  it('records the alias substitution TypeScript probed for a broken alias', () => {
+    const root = createWorkspace();
+    write(root, 'tsconfig.json', JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }));
+    const from = write(root, 'src/main.ts', '');
+
+    const { provenance } = createImportResolver(root).resolveModuleWithProvenance(from, '@/gone');
+
+    expect(provenance.failedLookups).toContain('src/gone.ts');
+  });
+
+  it('records the package.json a directory import read, and the directory a baseUrl test looked at', () => {
+    const root = createWorkspace();
+    write(root, 'tsconfig.json', JSON.stringify({ compilerOptions: { baseUrl: 'src' } }));
+    write(root, 'src/pkg/package.json', JSON.stringify({ main: 'entry.js' }));
+    write(root, 'src/pkg/entry.js', 'module.exports = 1;');
+    write(root, 'src/billing/invoice.ts', 'export const invoice = 1;');
+    const from = write(root, 'src/main.ts', '');
+
+    const resolver = createImportResolver(root);
+
+    const directoryImport = resolver.resolveModuleWithProvenance(from, './pkg');
+    expect(directoryImport.provenance.target).toBe('src/pkg/entry.js');
+    // Editing that manifest moves the edge, so the file it read is part of the answer.
+    expect(directoryImport.provenance.affecting).toContain('src/pkg/package.json');
+
+    // `billing/deleted` is only reported rather than filed as a package because
+    // `src/billing` exists on disk; that directory is therefore part of the answer.
+    const baseUrlMiss = resolver.resolveModuleWithProvenance(from, 'billing/deleted');
+    expect(baseUrlMiss.resolution).toEqual({ kind: 'unresolved', reason: 'not-found' });
+    expect(baseUrlMiss.provenance.directoryProbes).toContain('src/billing');
+  });
+
+  it('never reports a resolution TypeScript answered without any provenance at all', () => {
+    const root = createWorkspace();
+    write(root, 'tsconfig.json', JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } } }));
+    write(root, 'src/b.js', 'export const b = 1;');
+    write(root, 'src/dir/index.ts', 'export const d = 1;');
+    const from = write(root, 'src/main.ts', '');
+
+    const resolver = createImportResolver(root);
+
+    // Every one of these can ONLY be answered by probing paths that do not exist, so a
+    // TypeScript that stopped handing back `failedLookupLocations` would make the
+    // incremental cache silently blind. This test is the tripwire for that.
+    for (const specifier of ['./b', './dir', './nowhere', '@/nowhere']) {
+      const { provenance } = resolver.resolveModuleWithProvenance(from, specifier);
+      expect(
+        provenance.failedLookups.length,
+        `${specifier} came back with no failed lookup locations — TypeScript's resolution provenance is gone`
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps provenance out of paths the workspace walk can never see', () => {
+    const root = createWorkspace();
+    write(root, 'node_modules/dep/package.json', JSON.stringify({ name: 'dep', main: 'index.js' }));
+    write(root, 'node_modules/dep/index.js', 'module.exports = 1;');
+    const from = write(root, 'src/main.ts', '');
+
+    const { provenance } = createImportResolver(root).resolveModuleWithProvenance(from, 'dep');
+
+    // Resolving a package probes hundreds of `node_modules` paths and walks out past the
+    // workspace root. None of them can ever appear in a walk diff, so none of them is
+    // worth a byte of cache.
+    for (const probed of [...provenance.failedLookups, ...provenance.affecting]) {
+      expect(probed.startsWith('..'), probed).toBe(false);
+      expect(probed.includes('node_modules'), probed).toBe(false);
+    }
+  });
+
+  it('re-expresses a probe inside a symlinked workspace package as the path the walk spells', () => {
+    const root = createWorkspace();
+    write(root, 'packages/ui/package.json', JSON.stringify({ name: '@w/ui', main: 'index.js' }));
+    write(root, 'packages/ui/index.js', 'module.exports = 1;');
+    const from = write(root, 'src/main.ts', '');
+    linkDirectory(join(root, 'packages', 'ui'), join(root, 'node_modules', '@w', 'ui'));
+
+    const { resolution, provenance } = createImportResolver(root).resolveModuleWithProvenance(from, '@w/ui');
+
+    expect(resolution.kind).toBe('internal');
+    expect(provenance.target).toBe('packages/ui/index.js');
+    // TypeScript probed `node_modules/@w/ui/index.ts` — the walk will only ever report
+    // `packages/ui/index.ts`, so the provenance has to be told in the walk's spelling.
+    expect(provenance.failedLookups).toContain('packages/ui/index.ts');
+  });
+});

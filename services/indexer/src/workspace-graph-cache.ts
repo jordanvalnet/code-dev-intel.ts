@@ -10,6 +10,18 @@ import {
   type ModuleGraphFacts,
   type ReExportedName
 } from './module-graph-extractor.ts';
+import {
+  canonicalRootKey,
+  graphCacheEngineVersion,
+  GRAPH_CACHE_SCHEMA_VERSION,
+  isGraphCacheEnabled,
+  readPersistedGraph,
+  writePersistedGraph,
+  type PersistedEdge,
+  type PersistedFile,
+  type PersistedResolution,
+  type PersistedWorkspaceGraph
+} from './workspace-graph-store.ts';
 
 export interface ImportEdge {
   sourceFile: string;
@@ -45,8 +57,25 @@ export interface WorkspaceGraphCacheStats {
   /** Files whose specifiers were resolved again this call. */
   resolvedFiles: number;
   reusedResolutions: number;
+  /**
+   * Unchanged files that still had to be resolved again, because a file that appeared or
+   * vanished is one their resolver actually looked at. The rest of a file-set change
+   * costs nothing — this number is how small "the rest" turned out to be.
+   */
+  invalidatedByProvenance: number;
+  /**
+   * Files resolved again because their answer rests on something no walk diff can
+   * report — a path under a directory the walk refuses to enter, a symlink, or a target
+   * the walk does not list at all. They are redone on every call, so this number is
+   * also how much of the workspace is paying for a blind spot.
+   */
+  unwatchableFiles: number;
   /** A `tsconfig`/`jsconfig` changed, so every resolution had to be redone. */
   configChanged: boolean;
+  /** This call started from the graph a previous PROCESS left in the user cache directory. */
+  persistedLoad: boolean;
+  /** This call wrote the workspace back to the user cache directory. */
+  persistedSave: boolean;
   /** Milliseconds spent walking the directory tree and stat-ing what it found. */
   walkMs: number;
 }
@@ -109,6 +138,12 @@ interface FileStamp {
 interface ParsedFileEntry extends FileStamp {
   /** `Date.now()` taken BEFORE the file was read — see `MTIME_SAFETY_MS`. */
   cachedAtMs: number;
+  /**
+   * Digest of the content these facts were extracted from. It exists for one job: a
+   * rename is guessed from `(mtime, size, extension)`, and that is a hint, not proof of
+   * identity — this is the proof.
+   */
+  digest: string;
   facts: ModuleGraphFacts;
 }
 
@@ -117,12 +152,44 @@ interface RawUnresolved {
   reason: UnresolvedReason;
 }
 
+/**
+ * Every workspace path one file's resolutions looked at, merged and deduplicated. This
+ * is the whole basis of incremental invalidation: when a walk reports files appearing
+ * and vanishing, a file has to be resolved again if and only if the change intersects
+ * this — the rule `tsserver` uses to decide which resolutions a file event invalidates.
+ */
+interface FileProvenance {
+  /** Workspace files this file's specifiers resolved to. Deleting one moves an edge. */
+  targets: string[];
+  /** Paths probed and not found. One of them appearing outranks whatever answered. */
+  failedLookups: string[];
+  /**
+   * Manifests whose content steered an answer (the `package.json` a directory import
+   * read). Recorded, and checked below, but unreachable by construction: `package.json`,
+   * `tsconfig.json` and `jsconfig.json` all end in `.json`, a tracked asset extension, so
+   * a manifest appearing or vanishing is already an asset event AND a change to the
+   * walk's manifest map — either of which forces a full re-resolution before the rule is
+   * consulted. It is kept because it is exactly the evidence a narrower manifest rule
+   * would need, and it costs 0.04 MB of a 6.9 MB cache file on a 4,000-file workspace.
+   */
+  affecting: string[];
+  /** Paths whose existence AS A DIRECTORY decided an answer; anything below one counts. */
+  directoryProbes: string[];
+}
+
 interface ResolvedFileEntry {
   /** Edges to code files. */
   edges: ImportEdge[];
   /** Edges to non-code files, kept apart so one cache serves both `includeAssets` values. */
   assetEdges: ImportEdge[];
   unresolved: RawUnresolved[];
+  provenance: FileProvenance;
+  /**
+   * This answer rests on something no walk diff can report — see `isUnwatchable`. Such
+   * a file is resolved again on every call, which is the only honest thing to do with a
+   * resolution whose evidence cannot be watched.
+   */
+  unwatchable: boolean;
 }
 
 interface AssembledGraph {
@@ -137,6 +204,10 @@ interface WorkspaceCacheEntry {
   walkOrder: string[];
   walkAbsolute: Map<string, string>;
   assets: Set<string>;
+  /** Every directory the last walk saw — see `WalkResult.directories`. */
+  directories: Set<string>;
+  /** Entries the last walk could not look inside — see `WalkResult.others`. */
+  others: Set<string>;
   /** Content digests of every `package.json` / `tsconfig.json` / `jsconfig.json` walked. */
   manifests: Map<string, string>;
   resolved: Map<string, ResolvedFileEntry>;
@@ -144,17 +215,43 @@ interface WorkspaceCacheEntry {
   configFingerprint: string;
   /** False until a full walk has happened, so a partial map is never diffed against. */
   walked: boolean;
+  /** The user-cache file has been looked for once; there is no second attempt. */
+  persistenceChecked: boolean;
   /** Assembled containers, keyed by `includeAssets`. */
   assembled: Map<boolean, AssembledGraph>;
   lastUsedAt: number;
 }
 
-const workspaceCache = new Map<string, WorkspaceCacheEntry>();
+let workspaceCache = new Map<string, WorkspaceCacheEntry>();
 let cacheClock = 0;
+let persistenceSuspended = false;
 
 export function resetWorkspaceGraphCacheForTests(): void {
   workspaceCache.clear();
   cacheClock = 0;
+}
+
+/**
+ * Test-only: run `build` against an empty cache and with the persisted file ignored,
+ * then put the real cache back. It is how a long-lived incremental entry is compared
+ * against a from-scratch build of the same workspace state without destroying the entry
+ * being tested — the assertion that makes incremental invalidation provable rather than
+ * plausible.
+ */
+export function withEmptyWorkspaceGraphCacheForTests<T>(build: () => T): T {
+  const previousCache = workspaceCache;
+  const previousClock = cacheClock;
+  const previousSuspension = persistenceSuspended;
+  workspaceCache = new Map();
+  cacheClock = 0;
+  persistenceSuspended = true;
+  try {
+    return build();
+  } finally {
+    workspaceCache = previousCache;
+    cacheClock = previousClock;
+    persistenceSuspended = previousSuspension;
+  }
 }
 
 /**
@@ -202,6 +299,23 @@ interface WalkResult {
   absolute: Map<string, string>;
   stamps: Map<string, FileStamp>;
   assets: Set<string>;
+  /**
+   * Every directory the walk saw, skipped ones included. Resolution can turn on whether
+   * a directory EXISTS — `billing/gone` is a package when nothing called `billing` is
+   * there and a lost workspace edge when something is — and an empty directory being
+   * created or removed is a change no file event reports.
+   */
+  directories: Set<string>;
+  /**
+   * Entries the walk saw and did not look inside: a directory it refuses to enter
+   * (build output, a hidden directory, a nested checkout) and every dirent that is
+   * neither a file nor a directory — a symlink it will not follow. Nothing underneath
+   * one of these can ever appear in a walk diff, which is what makes a resolution that
+   * looked there unwatchable.
+   */
+  blocked: Set<string>;
+  /** Dirents that are neither file nor directory. Their existence is tracked; their contents are not. */
+  others: Set<string>;
   manifests: Map<string, string>;
   walkMs: number;
 }
@@ -219,19 +333,32 @@ function walkWorkspace(workspaceRoot: string): WalkResult {
   const absolute = new Map<string, string>();
   const stamps = new Map<string, FileStamp>();
   const assets = new Set<string>();
+  const directories = new Set<string>();
+  const blocked = new Set<string>();
+  const others = new Set<string>();
   const manifests = new Map<string, string>();
 
   function walk(currentDir: string): void {
     for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
       const absolutePath = join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        if (!shouldSkipDirectory(entry.name, absolutePath)) {
+        const relativeDirectory = toRelativePosixPath(workspaceRoot, absolutePath);
+        directories.add(relativeDirectory);
+        if (shouldSkipDirectory(entry.name, absolutePath)) {
+          blocked.add(relativeDirectory);
+        } else {
           walk(absolutePath);
         }
         continue;
       }
 
       if (!entry.isFile()) {
+        // A symlink (or a device, or a socket). It is not parsed and not followed, so
+        // nothing below it is ever reported — but the entry itself appearing or
+        // vanishing is a real event, and a specifier can resolve straight to it.
+        const relativeOther = toRelativePosixPath(workspaceRoot, absolutePath);
+        others.add(relativeOther);
+        blocked.add(relativeOther);
         continue;
       }
 
@@ -260,7 +387,17 @@ function walkWorkspace(workspaceRoot: string): WalkResult {
   }
 
   walk(workspaceRoot);
-  return { order, absolute, stamps, assets, manifests, walkMs: performance.now() - startedAt };
+  return {
+    order,
+    absolute,
+    stamps,
+    assets,
+    directories,
+    blocked,
+    others,
+    manifests,
+    walkMs: performance.now() - startedAt
+  };
 }
 
 function fingerprintConfigSources(sources: readonly string[]): string {
@@ -292,20 +429,30 @@ function hasConfigChanged(entry: WorkspaceCacheEntry, walk: WalkResult): boolean
   return false;
 }
 
-function countAssetDiff(
+/**
+ * What appeared and what vanished between two walks. The lists, not just the counts: an
+ * asset arriving is exactly the event that turns one importer's `not-found` into an
+ * edge, and naming it is what keeps the other four thousand files' resolutions.
+ */
+function diffPaths(
   previous: ReadonlySet<string>,
   current: ReadonlySet<string>
-): { added: number; removed: number; changed: boolean } {
-  let added = 0;
+): { added: string[]; removed: string[]; changed: boolean } {
+  const added: string[] = [];
   for (const relativePath of current) {
     if (!previous.has(relativePath)) {
-      added += 1;
+      added.push(relativePath);
     }
   }
 
-  // An asset only ever exists or not, so the counts alone settle the difference.
-  const removed = previous.size - (current.size - added);
-  return { added, removed, changed: added > 0 || removed > 0 };
+  const removed: string[] = [];
+  for (const relativePath of previous) {
+    if (!current.has(relativePath)) {
+      removed.push(relativePath);
+    }
+  }
+
+  return { added, removed, changed: added.length > 0 || removed.length > 0 };
 }
 
 function isStale(entry: ParsedFileEntry, stamp: FileStamp): boolean {
@@ -318,11 +465,47 @@ function isStale(entry: ParsedFileEntry, stamp: FileStamp): boolean {
   return entry.mtimeMs >= entry.cachedAtMs - MTIME_SAFETY_MS;
 }
 
+function digestOfContent(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
 function parseFile(absolutePath: string): ParsedFileEntry {
   const cachedAtMs = Date.now();
   const stats = statSync(absolutePath);
-  const facts = extractModuleGraph(absolutePath, readFileSync(absolutePath, 'utf8'));
-  return { mtimeMs: stats.mtimeMs, size: stats.size, cachedAtMs, facts };
+  const content = readFileSync(absolutePath, 'utf8');
+  return {
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+    cachedAtMs,
+    digest: digestOfContent(content),
+    facts: extractModuleGraph(absolutePath, content)
+  };
+}
+
+/**
+ * Take over `candidate`'s facts for a file that has just appeared, but only once the
+ * bytes say it really is the same file.
+ *
+ * `(mtime, size, extension)` is what says "this addition is that removal moved", and it
+ * is not proof: an archive restored with its timestamps, a codegen run, a `git`
+ * operation that rewrites a tree can all produce a new file of the same length carrying
+ * the same stamp as a file that just went away. Adopting the parse then hands the new
+ * file the old file's exports — and `impactedFiles` filters on exports, so the answer
+ * is wrong rather than slow. `null` means "not the same file", and the caller parses it
+ * like any other addition.
+ */
+function adoptRenamedParse(absolutePath: string, candidate: ParsedFileEntry): ParsedFileEntry | null {
+  try {
+    const cachedAtMs = Date.now();
+    const stats = statSync(absolutePath);
+    const content = readFileSync(absolutePath, 'utf8');
+    if (digestOfContent(content) !== candidate.digest) {
+      return null;
+    }
+    return { mtimeMs: stats.mtimeMs, size: stats.size, cachedAtMs, digest: candidate.digest, facts: candidate.facts };
+  } catch {
+    return null;
+  }
 }
 
 function emptyEntry(): WorkspaceCacheEntry {
@@ -331,11 +514,14 @@ function emptyEntry(): WorkspaceCacheEntry {
     walkOrder: [],
     walkAbsolute: new Map(),
     assets: new Set(),
+    directories: new Set(),
+    others: new Set(),
     manifests: new Map(),
     resolved: new Map(),
     configSources: [],
     configFingerprint: '',
     walked: false,
+    persistenceChecked: false,
     assembled: new Map(),
     lastUsedAt: 0
   };
@@ -501,10 +687,12 @@ function refreshParses(entry: WorkspaceCacheEntry, walk: WalkResult): DiffResult
       const match = candidates?.length === 1 ? candidates[0] : undefined;
       // The recency rule applies to a rename too: a codegen run that deletes one file
       // and writes a different one of the same length in the same timestamp tick would
-      // otherwise hand the new file the old file's parse.
+      // otherwise hand the new file the old file's parse. Beyond the margin the stamp
+      // proves nothing either, so the content is what decides.
       const reusable = match && !isStale(match, stamp) ? match : undefined;
-      if (reusable) {
-        entry.parsed.set(absolutePath, reusable);
+      const adopted = reusable === undefined ? null : adoptRenamedParse(absolutePath, reusable);
+      if (adopted !== null) {
+        entry.parsed.set(absolutePath, adopted);
         removedByStamp.delete(stampKey);
         renamed += 1;
         reusedParses += 1;
@@ -535,6 +723,129 @@ function refreshParses(entry: WorkspaceCacheEntry, walk: WalkResult): DiffResult
   return { added, removed, renamed, modified, reusedParses };
 }
 
+/** Walk paths are compared, never displayed, so they fold the way the filesystem does. */
+function foldWalkPath(relativePath: string): string {
+  return process.platform === 'win32' ? relativePath.toLowerCase() : relativePath;
+}
+
+/**
+ * What a walk can and cannot answer for, in the walk's own spelling.
+ *
+ * `reports` is the set of paths this walk actually produced. `canSee` is the weaker
+ * question a resolution has to ask about a path it probed and did NOT find: could such
+ * a file ever turn up in a walk diff? For anything under a directory the walk refuses
+ * to enter — build output, a hidden directory, a nested checkout — or under a symlink
+ * it will not follow, the answer is no, and no amount of diffing will ever say that
+ * file arrived.
+ */
+interface WalkVisibility {
+  reports(walkPath: string): boolean;
+  canSee(walkPath: string): boolean;
+}
+
+function createWalkVisibility(walk: WalkResult): WalkVisibility {
+  // Both spellings, so the two kinds of path this is asked about — provenance, which is
+  // already folded, and an edge target, which is spelled the way the resolver found it —
+  // both answer without folding anything per lookup.
+  const reported = new Set<string>();
+  const report = (relativePath: string): void => {
+    reported.add(relativePath);
+    reported.add(foldWalkPath(relativePath));
+  };
+  for (const relativePath of walk.order) {
+    report(relativePath);
+  }
+  for (const relativePath of walk.assets) {
+    report(relativePath);
+  }
+  for (const relativePath of walk.others) {
+    report(relativePath);
+  }
+
+  const blocked = new Set<string>();
+  for (const relativePath of walk.blocked) {
+    blocked.add(foldWalkPath(relativePath));
+  }
+
+  const parentOf = (walkPath: string): string => {
+    const separatorIndex = walkPath.lastIndexOf('/');
+    return separatorIndex <= 0 ? '' : walkPath.slice(0, separatorIndex);
+  };
+
+  // Memoized per directory: a workspace has thousands of probed paths and hundreds of
+  // distinct directories to hold them, and every path in one directory has one answer.
+  const visibleDirectories = new Map<string, boolean>();
+  const canSeeDirectory = (directory: string): boolean => {
+    if (directory.length === 0) {
+      return true;
+    }
+    const memoized = visibleDirectories.get(directory);
+    if (memoized !== undefined) {
+      return memoized;
+    }
+    const visible = !blocked.has(directory) && canSeeDirectory(parentOf(directory));
+    visibleDirectories.set(directory, visible);
+    return visible;
+  };
+
+  return {
+    reports: (walkPath) => reported.has(walkPath) || reported.has(foldWalkPath(walkPath)),
+    canSee: (walkPath) => canSeeDirectory(parentOf(walkPath))
+  };
+}
+
+/**
+ * Is this file's answer one a walk diff can be trusted to keep honest?
+ *
+ * Two ways it is not. The answer may NAME a file the walk does not report — a target
+ * under a directory the walk refuses to enter, or, for a resolution restored from a
+ * cache file, a path that is simply not there any more (or never was). Or its evidence
+ * may LIE where the walk never looks: the resolver reads the whole disk, the walk skips
+ * build output, hidden directories, nested checkouts and symlinks, so a file arriving in
+ * one of those places is an event no diff will ever report — the `dist/` a package is
+ * built into after the graph was taken is the everyday case. Either way the resolution
+ * is redone on every call until it is back inside what the walk can see, so a blind spot
+ * costs time rather than outliving the process that made it.
+ */
+function isUnwatchable(resolved: ResolvedFileEntry, visibility: WalkVisibility): boolean {
+  // The edges are what a caller actually reads, and every internal or asset resolution
+  // produces one, so they are the whole record of what this answer names — checked
+  // directly rather than through the provenance that should agree with them, because a
+  // cache file writes both and a file that could disagree with itself can lie.
+  for (const edge of resolved.edges) {
+    if (!visibility.reports(edge.targetFile)) {
+      return true;
+    }
+  }
+
+  for (const edge of resolved.assetEdges) {
+    if (!visibility.reports(edge.targetFile)) {
+      return true;
+    }
+  }
+
+  const provenance = resolved.provenance;
+  for (const probed of provenance.failedLookups) {
+    if (!visibility.canSee(probed)) {
+      return true;
+    }
+  }
+
+  for (const manifest of provenance.affecting) {
+    if (!visibility.canSee(manifest)) {
+      return true;
+    }
+  }
+
+  for (const directory of provenance.directoryProbes) {
+    if (!visibility.canSee(directory)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /**
  * Resolve one file's specifiers into edges plus an unresolved report. Asset edges are
  * kept separate so the same cached entry answers both `includeAssets` settings.
@@ -544,14 +855,39 @@ function resolveFile(
   importResolver: ReturnType<typeof createImportResolver>,
   relativePath: string,
   absolutePath: string,
-  facts: ModuleGraphFacts
+  facts: ModuleGraphFacts,
+  visibility: WalkVisibility
 ): ResolvedFileEntry {
   const edges: ImportEdge[] = [];
   const assetEdges: ImportEdge[] = [];
   const unresolved: RawUnresolved[] = [];
+  const targets = new Set<string>();
+  const failedLookups = new Set<string>();
+  const affecting = new Set<string>();
+  const directoryProbes = new Set<string>();
 
   for (const fileImport of facts.imports) {
-    const resolution = importResolver.resolveModule(absolutePath, fileImport.specifier);
+    const { resolution, provenance } = importResolver.resolveModuleWithProvenance(
+      absolutePath,
+      fileImport.specifier
+    );
+
+    // Merged across the file's specifiers: invalidation is decided per file, so the
+    // union is all that is ever asked, and deduplicating here is what keeps the record
+    // small enough to hold for a workspace and write to disk.
+    if (provenance.target !== undefined) {
+      targets.add(provenance.target);
+    }
+    for (const probed of provenance.failedLookups) {
+      failedLookups.add(probed);
+    }
+    for (const manifest of provenance.affecting) {
+      affecting.add(manifest);
+    }
+    for (const directory of provenance.directoryProbes) {
+      directoryProbes.add(directory);
+    }
+
     if (resolution.kind === 'external') {
       continue;
     }
@@ -576,7 +912,142 @@ function resolveFile(
     unresolved.push({ specifier: dynamicSpecifier, reason: 'dynamic-specifier' });
   }
 
-  return { edges, assetEdges, unresolved };
+  const resolved: ResolvedFileEntry = {
+    edges,
+    assetEdges,
+    unresolved,
+    provenance: {
+      targets: [...targets],
+      failedLookups: [...failedLookups],
+      affecting: [...affecting],
+      directoryProbes: [...directoryProbes]
+    },
+    unwatchable: false
+  };
+  resolved.unwatchable = isUnwatchable(resolved, visibility);
+  return resolved;
+}
+
+/**
+ * The changed paths plus every directory above them. A resolution that turned on
+ * whether `src/billing` exists has to be redone when the first file appears under it or
+ * the last one leaves, and neither event names the directory itself.
+ */
+function changeClosure(changes: ReadonlyArray<ReadonlySet<string>>): Set<string> {
+  const closure = new Set<string>();
+  for (const changed of changes) {
+    for (const relativePath of changed) {
+      closure.add(relativePath);
+      let current = relativePath;
+      for (;;) {
+        const separatorIndex = current.lastIndexOf('/');
+        if (separatorIndex <= 0) {
+          break;
+        }
+        current = current.slice(0, separatorIndex);
+        if (closure.has(current)) {
+          break;
+        }
+        closure.add(current);
+      }
+    }
+  }
+  return closure;
+}
+
+/** Did this file's resolver actually look at anything the walk diff moved? */
+function provenanceTouchesChange(
+  provenance: FileProvenance,
+  added: ReadonlySet<string>,
+  removed: ReadonlySet<string>,
+  closure: ReadonlySet<string>
+): boolean {
+  for (const target of provenance.targets) {
+    if (removed.has(target)) {
+      return true;
+    }
+  }
+
+  for (const probed of provenance.failedLookups) {
+    if (added.has(probed)) {
+      return true;
+    }
+  }
+
+  // Unreachable by construction, and kept deliberately: `package.json`, `tsconfig.json`
+  // and `jsconfig.json` all end in `.json`, which is a tracked asset extension, so a
+  // manifest appearing or vanishing is already an asset event AND a change to the walk's
+  // manifest map — both of which mean a full re-resolution before this rule is ever
+  // consulted. The list is collected and persisted because it is exactly the evidence a
+  // narrower manifest rule would need, and it costs 0.04 MB of a 6.6 MB cache file.
+  for (const manifest of provenance.affecting) {
+    if (added.has(manifest) || removed.has(manifest)) {
+      return true;
+    }
+  }
+
+  for (const directory of provenance.directoryProbes) {
+    if (closure.has(directory)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Drop the resolutions no walk diff can keep honest, so they are taken again from disk.
+ *
+ * A `visibility` re-derives the flags; `null` trusts the ones already there. They are
+ * decided against a particular walk, so a change in what that walk can see — a `dist/`
+ * appearing, a directory becoming a nested checkout — moves them, and so does arriving
+ * from a cache file written by another process, whose flags were never checked against
+ * this disk. On a call where neither happened, an unchanged workspace pays one boolean
+ * per file and never builds the index.
+ */
+function dropUnwatchableResolutions(entry: WorkspaceCacheEntry, visibility: WalkVisibility | null): number {
+  let dropped = 0;
+
+  for (const [relativePath, resolved] of entry.resolved) {
+    if (visibility !== null) {
+      resolved.unwatchable = isUnwatchable(resolved, visibility);
+    }
+    if (resolved.unwatchable) {
+      entry.resolved.delete(relativePath);
+      dropped += 1;
+    }
+  }
+
+  return dropped;
+}
+
+/**
+ * Drop the resolutions a file-set change can actually have moved, and only those.
+ *
+ * The old rule was "any file appeared or vanished, so redo all of them", which on a
+ * four-thousand-file workspace meant nine seconds for one `git checkout` — and file
+ * creation, deletion and renaming are the most common events in an agent's editing
+ * loop. The rule here is the one a language server uses: a resolution survives unless
+ * the change is a path it resolved to, a path it probed and did not find, a manifest it
+ * read, or a directory whose existence it tested.
+ */
+function invalidateByProvenance(
+  entry: WorkspaceCacheEntry,
+  added: ReadonlySet<string>,
+  removed: ReadonlySet<string>,
+  changedDirectories: ReadonlySet<string>
+): number {
+  const closure = changeClosure([added, removed, changedDirectories]);
+  let invalidated = 0;
+
+  for (const [relativePath, resolved] of entry.resolved) {
+    if (provenanceTouchesChange(resolved.provenance, added, removed, closure)) {
+      entry.resolved.delete(relativePath);
+      invalidated += 1;
+    }
+  }
+
+  return invalidated;
 }
 
 /**
@@ -641,17 +1112,170 @@ function assemble(entry: WorkspaceCacheEntry, includeAssets: boolean): Assembled
   };
 }
 
+function toPersistedEdges(edges: readonly ImportEdge[]): PersistedEdge[] {
+  return edges.map((edge) => {
+    // `sourceFile` is not written: it is always the file the entry is filed under, and
+    // a cache file that could disagree with its own key is a cache file that can lie.
+    const persisted: PersistedEdge = { targetFile: edge.targetFile, importedSymbols: edge.importedSymbols };
+    if (edge.reExports !== undefined) {
+      persisted.reExports = edge.reExports;
+    }
+    return persisted;
+  });
+}
+
+function fromPersistedEdges(sourceFile: string, edges: readonly PersistedEdge[]): ImportEdge[] {
+  return edges.map((edge) => {
+    const restored: ImportEdge = { sourceFile, targetFile: edge.targetFile, importedSymbols: edge.importedSymbols };
+    if (edge.reExports !== undefined) {
+      restored.reExports = edge.reExports;
+    }
+    return restored;
+  });
+}
+
+function toPersistedResolution(resolved: ResolvedFileEntry): PersistedResolution {
+  return {
+    edges: toPersistedEdges(resolved.edges),
+    assetEdges: toPersistedEdges(resolved.assetEdges),
+    unresolved: resolved.unresolved,
+    provenance: resolved.provenance
+  };
+}
+
+function fromPersistedResolution(sourceFile: string, resolved: PersistedResolution): ResolvedFileEntry {
+  return {
+    edges: fromPersistedEdges(sourceFile, resolved.edges),
+    assetEdges: fromPersistedEdges(sourceFile, resolved.assetEdges),
+    unresolved: resolved.unresolved,
+    provenance: resolved.provenance,
+    // Nothing a cache file says about the disk is taken on trust, and this flag is a
+    // statement about the disk: every restored resolution is re-checked against the
+    // first walk of this process before it is allowed to answer anything.
+    unwatchable: false
+  };
+}
+
+/** Everything about this workspace that a new process could start from. */
+function toPersistedGraph(entry: WorkspaceCacheEntry, workspaceRoot: string): PersistedWorkspaceGraph {
+  const files: PersistedFile[] = [];
+
+  for (const relativePath of entry.walkOrder) {
+    const absolutePath = entry.walkAbsolute.get(relativePath);
+    const parsed = absolutePath === undefined ? undefined : entry.parsed.get(absolutePath);
+    if (!parsed) {
+      continue;
+    }
+
+    const file: PersistedFile = {
+      path: relativePath,
+      mtimeMs: parsed.mtimeMs,
+      size: parsed.size,
+      cachedAtMs: parsed.cachedAtMs,
+      digest: parsed.digest,
+      facts: parsed.facts
+    };
+    const resolved = entry.resolved.get(relativePath);
+    if (resolved) {
+      file.resolved = toPersistedResolution(resolved);
+    }
+    files.push(file);
+  }
+
+  return {
+    schemaVersion: GRAPH_CACHE_SCHEMA_VERSION,
+    engineVersion: graphCacheEngineVersion(),
+    root: canonicalRootKey(workspaceRoot),
+    savedAtMs: Date.now(),
+    files,
+    assets: [...entry.assets],
+    directories: [...entry.directories],
+    others: [...entry.others],
+    manifests: [...entry.manifests],
+    configSources: entry.configSources,
+    configFingerprint: entry.configFingerprint
+  };
+}
+
+/**
+ * Seed a cold entry from the file the last process left, then let the ordinary walk
+ * diff decide what survives. Nothing here is believed about the disk: every stamp is
+ * checked again by the walk, so a file the cache claims is unchanged and is not gets
+ * re-parsed exactly as it would after an in-process edit. A stale or hostile file can
+ * therefore cost time, never correctness.
+ */
+function loadPersistedEntry(entry: WorkspaceCacheEntry, workspaceRoot: string): boolean {
+  if (entry.persistenceChecked || entry.walked || persistenceSuspended) {
+    return false;
+  }
+
+  entry.persistenceChecked = true;
+  const read = readPersistedGraph(workspaceRoot);
+  if (read === null) {
+    return false;
+  }
+
+  for (const file of read.graph.files) {
+    const absolutePath = toPosixPath(join(workspaceRoot, file.path));
+    entry.walkOrder.push(file.path);
+    entry.walkAbsolute.set(file.path, absolutePath);
+
+    // A `dependencyGraph` read may already have parsed this file in this process, and
+    // what it read is newer than anything on disk. Its resolution was dropped with it,
+    // so the file simply resolves again below.
+    if (entry.parsed.has(absolutePath)) {
+      continue;
+    }
+
+    entry.parsed.set(absolutePath, {
+      mtimeMs: file.mtimeMs,
+      size: file.size,
+      cachedAtMs: file.cachedAtMs,
+      digest: file.digest,
+      facts: file.facts
+    });
+    if (file.resolved !== undefined) {
+      entry.resolved.set(file.path, fromPersistedResolution(file.path, file.resolved));
+    }
+  }
+
+  entry.assets = new Set(read.graph.assets);
+  entry.directories = new Set(read.graph.directories);
+  entry.others = new Set(read.graph.others);
+  entry.manifests = new Map(read.graph.manifests);
+  entry.configSources = read.graph.configSources;
+  entry.configFingerprint = read.graph.configFingerprint;
+  entry.walked = true;
+  return true;
+}
+
+function savePersistedEntry(entry: WorkspaceCacheEntry, workspaceRoot: string): boolean {
+  // The same ceiling the loader refuses to read past, applied before serializing rather
+  // than after: a workspace this large would build a JSON string measured in hundreds of
+  // megabytes, and it would be rejected on the way back in anyway.
+  if (persistenceSuspended || !isGraphCacheEnabled() || entry.walkOrder.length > WORKSPACE_CACHE_LIMITS.maxFiles) {
+    return false;
+  }
+
+  return writePersistedGraph(workspaceRoot, toPersistedGraph(entry, workspaceRoot));
+}
+
 /**
  * The workspace module graph, cached per workspace root for the life of the process.
  *
  * Each call re-walks the directory tree — cheap next to parsing, and the only way to
  * see a file appear, vanish or move — then re-parses only the files whose stamp moved
- * and re-resolves only what the change can have affected. Content edits touch one
- * file's edges; anything that changes the SET of files, or any `tsconfig`/`jsconfig`/
- * `package.json` content, redoes every resolution, because those are exactly the inputs
- * that decide where a specifier points (a new `b.ts` can shadow the `b.js` a specifier
- * used to resolve to, and an alias edit moves every aliased edge at once). The parses
- * survive that: they depend on the file, not on the workspace around it.
+ * and re-resolves only the files the change can have reached. A content edit touches
+ * one file's edges. A file appearing, vanishing or moving touches the files whose
+ * resolver actually looked at it: the ones that resolved TO it, probed for it and did
+ * not find it, read a manifest that moved, or tested a directory it lives under. Only a
+ * `tsconfig`/`jsconfig`/`package.json` content change still redoes every resolution,
+ * because an alias edit moves every aliased edge at once. The parses survive all of it:
+ * they depend on the file, not on the workspace around it.
+ *
+ * The first call in a process also looks for the graph a previous process left in the
+ * user's cache directory, and starts from it — an editor or agent session spawns a new
+ * server, and paying the cold build once per session was the larger of the two costs.
  */
 export function getWorkspaceGraph(
   workspaceRoot: string,
@@ -659,34 +1283,70 @@ export function getWorkspaceGraph(
 ): { graph: WorkspaceGraphResult; reverseIndex: Map<string, ImportEdge[]> } {
   const includeAssets = options?.includeAssets ?? DEFAULT_INCLUDE_ASSETS;
   const entry = entryFor(workspaceRoot);
+  const persistedLoad = loadPersistedEntry(entry, workspaceRoot);
   const hit = entry.walked;
 
   const walk = walkWorkspace(workspaceRoot);
   const configChanged = hit && hasConfigChanged(entry, walk);
-  const assetDiff = countAssetDiff(entry.assets, walk.assets);
+  const assetDiff = diffPaths(entry.assets, walk.assets);
+  const directoryDiff = diffPaths(entry.directories, walk.directories);
+  // A symlink is never followed, so it is not a file to this cache — but it can be the
+  // very path a specifier resolves to, and one appearing or vanishing has to reach the
+  // resolutions that named it.
+  const otherDiff = diffPaths(entry.others, walk.others);
+
+  // Built at most once per call, and only when something actually asks: an unchanged
+  // workspace with nothing to re-resolve never pays for it.
+  let visibility: WalkVisibility | undefined;
+  const walkVisibility = (): WalkVisibility => (visibility ??= createWalkVisibility(walk));
 
   // A cold entry has an empty walk snapshot, so the same diff reports every file as
   // added and every parse as missing — no separate cold path is needed.
   const changes = refreshParses(entry, walk);
-  const fileSetChanged = changes.added.length > 0 || changes.removed.length > 0 || assetDiff.changed;
+  const fileSetChanged =
+    changes.added.length > 0 || changes.removed.length > 0 || assetDiff.changed || otherDiff.changed;
+  // A directory appearing or vanishing moves no file, and still moves an answer: a bare
+  // specifier under `baseUrl` is a package when nothing of that name is on disk and a
+  // lost workspace edge when something is. Deleting the last file in a directory and
+  // then deleting the directory are two separate events, and only the second one is this.
+  const structureChanged = fileSetChanged || directoryDiff.changed;
 
   entry.walkOrder = walk.order;
   entry.walkAbsolute = walk.absolute;
   entry.assets = walk.assets;
+  entry.directories = walk.directories;
+  entry.others = walk.others;
   entry.manifests = walk.manifests;
 
-  // Resolution depends on the whole workspace, not on one file: a new `b.ts` can shadow
-  // the `b.js` a specifier used to reach, a deleted file turns an edge into a hole, and
-  // an alias edit moves every aliased edge at once. So a changed file set or a changed
-  // config redoes all of them — while the parses, which depend only on the file itself,
-  // survive untouched.
-  const mustResolveAll = !hit || configChanged || fileSetChanged;
+  // A config decides where EVERY specifier points, so an edit to one is the single case
+  // that still redoes all of them. A package manifest is on that list too: its `main`,
+  // `exports` and `type` fields move edges anywhere the package is reachable from, and
+  // unlike a file appearing there is no probed path that says which importers care.
+  const mustResolveAll = !hit || configChanged;
+  let invalidatedByProvenance = 0;
+  let unwatchableFiles = 0;
   if (mustResolveAll) {
     entry.resolved.clear();
   } else {
     for (const relativePath of changes.modified) {
       entry.resolved.delete(relativePath);
     }
+
+    if (structureChanged) {
+      invalidatedByProvenance = invalidateByProvenance(
+        entry,
+        new Set([...changes.added, ...assetDiff.added, ...otherDiff.added].map(foldWalkPath)),
+        new Set([...changes.removed, ...assetDiff.removed, ...otherDiff.removed].map(foldWalkPath)),
+        new Set([...directoryDiff.added, ...directoryDiff.removed].map(foldWalkPath))
+      );
+    }
+
+    // What the walk can see moved with the structure, and a resolution restored from
+    // another process's file has never been checked against this disk at all.
+    unwatchableFiles = dropUnwatchableResolutions(
+      entry,
+      structureChanged || persistedLoad ? walkVisibility() : null
+    );
   }
 
   const pending = walk.order.filter((relativePath) => !entry.resolved.has(relativePath));
@@ -703,7 +1363,7 @@ export function getWorkspaceGraph(
       }
       entry.resolved.set(
         relativePath,
-        resolveFile(workspaceRoot, importResolver, relativePath, absolutePath, parsed.facts)
+        resolveFile(workspaceRoot, importResolver, relativePath, absolutePath, parsed.facts, walkVisibility())
       );
       resolvedFiles += 1;
     }
@@ -715,16 +1375,26 @@ export function getWorkspaceGraph(
     entry.configFingerprint = fingerprintConfigSources(entry.configSources);
   }
 
-  if (!hit || fileSetChanged || configChanged || changes.modified.length > 0) {
+  const changedSinceLastCall = !hit || structureChanged || configChanged || changes.modified.length > 0;
+  if (changedSinceLastCall || resolvedFiles > 0) {
     entry.assembled.clear();
   }
 
   entry.walked = true;
+  entry.persistenceChecked = true;
   let assembled = entry.assembled.get(includeAssets);
   if (!assembled) {
     assembled = assemble(entry, includeAssets);
     entry.assembled.set(includeAssets, assembled);
   }
+
+  // Written after the answer is assembled and never on the unchanged path, so a session
+  // that only asks questions pays nothing, and a session that changed the workspace
+  // hands the next process the work it just did. Files the walk cannot watch do not
+  // count as a change worth writing megabytes for: the next process re-resolves them on
+  // its own first call whatever the file says about them.
+  const persistedSave =
+    (changedSinceLastCall || resolvedFiles > unwatchableFiles) && savePersistedEntry(entry, workspaceRoot);
 
   enforceCacheBounds();
 
@@ -737,13 +1407,17 @@ export function getWorkspaceGraph(
         walkedAssets: walk.assets.size,
         parsedFiles: walk.order.length - changes.reusedParses,
         reusedParses: changes.reusedParses,
-        addedFiles: changes.added.length + assetDiff.added,
-        removedFiles: changes.removed.length + assetDiff.removed,
+        addedFiles: changes.added.length + assetDiff.added.length + otherDiff.added.length,
+        removedFiles: changes.removed.length + assetDiff.removed.length + otherDiff.removed.length,
         renamedFiles: changes.renamed,
         modifiedFiles: changes.modified.length,
         resolvedFiles,
         reusedResolutions,
+        invalidatedByProvenance,
+        unwatchableFiles,
         configChanged,
+        persistedLoad,
+        persistedSave,
         walkMs: Math.round(walk.walkMs * 100) / 100
       }
     },

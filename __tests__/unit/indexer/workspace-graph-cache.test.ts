@@ -251,6 +251,34 @@ describe('workspace graph cache', () => {
     ]);
   });
 
+  it('refuses a rename whose stamp matches but whose bytes do not, however old the stamp is', () => {
+    const root = createWorkspace();
+    write(root, 'src/a.ts', 'export const a = 1;\n');
+    write(root, 'src/b.ts', 'export const b = 1;\n');
+    const goneSoon = write(root, 'src/gone.ts', "import './a';\nexport const gone = 1;\n");
+    ageWorkspace(root);
+    const stamp = statSync(goneSoon);
+
+    expect(edgeStrings(root)).toEqual(['src/gone.ts -> src/a.ts']);
+
+    // Past the freshness margin the stamp is all the old rule had, and this is what an
+    // archive restored with its timestamps looks like: one file gone, one file arrived,
+    // same length, same extension, same mtime to the millisecond — and different bytes.
+    rmSync(goneSoon);
+    const arrival = write(root, 'src/arrived.ts', "import './b';\nexport const came = 1;\n");
+    utimesSync(arrival, new Date(stamp.mtimeMs), new Date(stamp.mtimeMs));
+    expect(statSync(arrival).size).toBe(stamp.size);
+    expect(statSync(arrival).mtimeMs).toBe(stamp.mtimeMs);
+
+    const after = buildWorkspaceGraph(root);
+
+    expect(after.cache.renamedFiles).toBe(0);
+    expect(after.exportsByFile['src/arrived.ts']).toEqual(['came']);
+    expect(after.imports.map((edge) => `${edge.sourceFile} -> ${edge.targetFile}`)).toEqual([
+      'src/arrived.ts -> src/b.ts'
+    ]);
+  });
+
   it('redoes every resolution when a tsconfig alias changes, without re-parsing the sources', () => {
     const root = createWorkspace();
     const configPath = write(root, 'tsconfig.json', JSON.stringify({ compilerOptions: { paths: { '@/*': ['src/*'] } } }));

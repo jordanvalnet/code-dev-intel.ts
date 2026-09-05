@@ -134,6 +134,17 @@ Owner: tooling-agent
 - Keep additions to the public API additive and documented (`services/code-intel-mcp/src/contracts.ts`, `/tools/describe`, MCP `tools/list`, README).
 Status: done (2026-09-04)
 
+### T-020 Incremental resolution invalidation + persisted graph cache
+Owner: tooling-agent
+- Replace "any change to the file set re-resolves everything" with the rule a language server uses: capture each resolution's provenance (resolved target, TypeScript's failed lookup locations and affecting locations, the exact candidates asset resolution probed, and any directory whose existence decided a `baseUrl`-shaped verdict), normalised to the walk's spelling, and re-resolve only the files whose provenance the walk diff intersects. Keep full re-resolution for a `tsconfig`/`jsconfig`/`package.json` content change.
+- Read TypeScript's provenance fields through a widening view (they are `@internal`) and fail a test loudly if a resolution that can only have been reached by probing comes back without them.
+- Prove equality rather than assert it: every scenario, and a seeded property test over a generated 300-file workspace (60 mutations by default, `CODE_INTEL_MUTATION_STEPS` for a long soak), must deep-equal a from-scratch build of the same workspace state.
+- Persist the entry to the OS user cache directory (never inside the workspace), keyed by a digest of the canonical root, validated field by field on load, written atomically, tolerating an unwritable or full disk, and swept so the directory cannot grow without bound; `CODE_INTEL_CACHE_DIR` and `CODE_INTEL_GRAPH_CACHE=off` control it.
+- Do not let persistence make the walk's blind spots permanent: a resolution whose target or probed paths lie where the walk never looks (build output, hidden directories, nested checkouts, symlinks), or which names a file the walk does not report at all, is re-resolved on every call instead of being trusted from memory or from disk.
+- Confirm a suspected rename with the content before adopting the deleted file's parse: `(mtime, size, extension)` is a hint, and an archive restored with its timestamps is the ordinary way it lies.
+- Report `invalidatedByProvenance`, `unwatchableFiles`, `persistedLoad` and `persistedSave` in the cache stats so the rule can be seen working.
+Status: done (2026-09-05)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.
