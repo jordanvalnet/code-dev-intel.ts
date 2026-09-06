@@ -2,6 +2,30 @@
 
 All notable changes to this package are documented in this file.
 
+## [Unreleased]
+
+### CI
+
+- **The quality gate now runs on Linux, Windows and macOS instead of on Linux alone.** This package resolves its two native binaries per platform (`@vscode/ripgrep` and seven per-platform `@ast-grep/cli` optional dependencies) and branches on `process.platform` in about twenty other places - `realpath` and case folding, the user cache directory (`LOCALAPPDATA` vs `XDG_CACHE_HOME`), spawn shapes and timeouts, the atomic temp-file rename, line endings. A single-runner pipeline could never have caught a mistake in any of it. The `quality` job is a `fail-fast: false` matrix, and coverage is still produced once (ubuntu + Node 24) rather than five times.
+
+  | OS | Node | What runs |
+  | --- | --- | --- |
+  | ubuntu-latest | 20 | lint, type-check, build, `--self-test` of the compiled server |
+  | ubuntu-latest | 22 | lint, type-check, full vitest suite |
+  | ubuntu-latest | 24 | lint, type-check, full vitest suite, coverage |
+  | windows-latest | 24 | lint, type-check, full vitest suite |
+  | macos-latest | 24 | lint, type-check, full vitest suite |
+
+  The Node 20 entry is deliberately not the full suite: `engines.node` claims `>=18.0.0`, but the **development** toolchain cannot run there (vitest 5 requires `^22.12 || ^24 || >=26`, and `node --experimental-strip-types`, which the CLI integration test spawns, only exists from Node 22.6). What a Node 20 consumer actually runs is the **compiled** package, so that job builds `dist/` and self-tests it - which boots the server, resolves both native binaries and answers four tool calls. `engines.node` is unchanged; Node 18 is end-of-life and remains untested.
+
+- **New `release-smoke` CI job, on the same three operating systems.** It packs the tarball a publish would produce (`pnpm pack`, which runs the package's own `prepack`), installs it into a throwaway project, starts the installed server on a free port and drives `/health` and one `searchStruct`. A `files` mistake, a per-platform optional dependency that does not install, or a path bug that only appears on Windows is invisible to a source-tree test run and visible here.
+
+- **The searchText perf budget is per platform.** `__tests__/unit/code-intel-mcp/perf.test.ts` asserted `< 2000 ms` everywhere, but what it measures is dominated by one cold ripgrep spawn, and a spawn costs what the operating system charges for it: on Windows the first launch of a freshly unpacked binary pays process creation plus an on-access antivirus scan. Linux and macOS keep 2000 ms; Windows has its own calibrated number; `CODE_INTEL_PERF_BUDGET_MS` overrides both for a runner whose spawn cost is neither. The test now also prints the duration it measured (`[perf] searchText platform=... durationMs=...`), so the budget can be recalibrated from CI evidence instead of from feel.
+
+- `scripts/release-smoke.mjs` is now runnable on a Windows or macOS runner: a `file:` tarball specifier is normalised to an absolute, forward-slash path before it is written into the throwaway project's `package.json` (a Windows path written as `file:D:\a\...` is not valid JSON to read back), the temporary project is canonicalised through `realpath` (macOS reports `/var/folders/...` for a `/private/var/...` directory, and a Windows runner's `TEMP` is the 8.3 short form), the install is pinned with `--ignore-workspace`, the health wait is configurable and no longer 15 s, and cleanup can no longer replace a real failure with its own - a `node_modules` tree Windows still holds open is now a warning rather than the error the job reports.
+
+- `perf-budget.yml`, `security.yml`, `pr-memory-reference.yml` and the `indexer-smoke` / `security` jobs of `ci.yml` stay on ubuntu: their thresholds and their tooling are calibrated for one runner.
+
 ## 0.5.0 - 2026-09-04
 
 ### Added

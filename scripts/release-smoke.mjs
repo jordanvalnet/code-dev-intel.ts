@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { createServer } from 'node:http';
@@ -8,6 +8,11 @@ const repoRoot = resolve(process.cwd());
 const packageJsonPath = resolve(repoRoot, 'package.json');
 const packageJson = JSON.parse(readFileSync(process.env.npm_package_json ?? packageJsonPath, 'utf8'));
 const publishedVersion = packageJson.version;
+
+/** Health wait for the background server. Generous because a cold CI runner unpacking a
+ * freshly installed tarball is slow to first byte, and this deadline only decides how
+ * long a genuinely broken start takes to be reported. */
+const DEFAULT_ENSURE_TIMEOUT_MS = 60_000;
 
 function quoteWindowsArgument(value) {
   if (!/[\s"]/u.test(value)) {
@@ -39,8 +44,51 @@ function readOption(name) {
   return argument ? argument.slice(prefix.length).trim() : undefined;
 }
 
+/**
+ * A `file:` specifier is what the CI job passes (the tarball `pnpm pack` just produced),
+ * and it arrives however the calling shell spelled it: relative, backslash-separated, or
+ * as a `file://` URL. It ends up inside the throwaway project's `package.json`, in a
+ * different directory, so it must be absolute — and it must use forward slashes, because
+ * a Windows path written into JSON as `file:D:\a\...` is read back with `\a` as an escape
+ * and a lone backslash is not a valid JSON escape at all.
+ */
+function normalizeVersionSpecifier(rawVersion) {
+  if (!rawVersion.startsWith('file:')) {
+    return rawVersion;
+  }
+
+  const rawPath = rawVersion
+    .slice('file:'.length)
+    .replaceAll('\\', '/')
+    // `file://host/path` and `file:///path` both leave leading slashes behind …
+    .replace(/^\/{2,}/u, '/')
+    // … and `/D:/a/pkg.tgz` is the URL spelling of a Windows absolute path.
+    .replace(/^\/([A-Za-z]:\/)/u, '$1');
+
+  const absolutePath = resolve(repoRoot, rawPath);
+  return `file:${absolutePath.replaceAll('\\', '/')}`;
+}
+
 function getVersion() {
-  return readOption('version') || publishedVersion;
+  return normalizeVersionSpecifier(readOption('version') || publishedVersion);
+}
+
+/**
+ * The real spelling of a path on disk. `realpathSync.native` asks the operating system,
+ * which is what turns a Windows 8.3 short name into its long form; it can fail on shapes
+ * the JavaScript implementation still handles, so that one stays as the fallback.
+ */
+function canonicalize(pathValue) {
+  try {
+    return realpathSync.native(pathValue);
+  } catch {
+    return realpathSync(pathValue);
+  }
+}
+
+function getEnsureTimeoutMs() {
+  const parsed = Number.parseInt(readOption('timeout') || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_ENSURE_TIMEOUT_MS;
 }
 
 async function getAvailablePort() {
@@ -134,6 +182,27 @@ function removeDirectoryWithRetry(directoryPath) {
   }
 }
 
+/**
+ * Cleanup runs in a `finally`, so anything it throws REPLACES the failure that brought us
+ * here — and on Windows a `node_modules` tree the just-killed server still has open is
+ * exactly the thing that throws. The smoke test's verdict must survive its own tidying up,
+ * so a directory that refuses to go is reported as a warning and left to the runner.
+ */
+function cleanUp(serverPid, tempProject) {
+  killProcess(serverPid);
+  sleepSync(500);
+
+  try {
+    removeDirectoryWithRetry(tempProject);
+  } catch (error) {
+    console.warn(
+      `warning: could not remove the temporary project at ${tempProject}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+}
+
 function extractPid(stdout) {
   const match = /pid\s+(\d+)/i.exec(stdout);
   if (!match?.[1]) {
@@ -180,8 +249,13 @@ function requestJson(url, body) {
 
 async function main() {
   const version = getVersion();
+  const ensureTimeoutMs = getEnsureTimeoutMs();
   const port = Number.parseInt(readOption('port') || '', 10) || await getAvailablePort();
-  const tempProject = mkdtempSync(join(tmpdir(), 'code-dev-intel-release-smoke-'));
+  // realpath so the root the server canonicalizes matches the one sent in the request
+  // body: macOS hands out `/var/folders/...` for a `/private/var/...` directory, and a
+  // Windows runner reports its TEMP directory in the 8.3 short form (a tilde-numbered
+  // profile segment), which is a different string for the same directory.
+  const tempProject = canonicalize(mkdtempSync(join(tmpdir(), 'code-dev-intel-release-smoke-')));
   let serverPid;
 
   try {
@@ -203,11 +277,21 @@ async function main() {
 
     writeFileSync(resolve(tempProject, 'sample.ts'), ['export interface SmokeTestShape {', '  id: string;', '  label: string;', '}', '', 'const smokeValue = 42;'].join('\n'));
 
-    runCommand('pnpm', ['install'], { cwd: tempProject }, 'pnpm install');
+    // --ignore-workspace: the temporary project sits in the OS temp directory, and a
+    // pnpm workspace file anywhere above it would silently make this a workspace member.
+    runCommand('pnpm', ['install', '--ignore-workspace'], { cwd: tempProject }, 'pnpm install');
 
     const ensureResult = runCommand(
       'pnpm',
-      ['exec', 'code-dev-intel', 'ensure', '--workspaceRoot=.', `--port=${port}`, '--timeout=15000', '--verbose'],
+      [
+        'exec',
+        'code-dev-intel',
+        'ensure',
+        '--workspaceRoot=.',
+        `--port=${port}`,
+        `--timeout=${ensureTimeoutMs}`,
+        '--verbose'
+      ],
       { cwd: tempProject },
       'ensure'
     );
@@ -241,6 +325,7 @@ async function main() {
       JSON.stringify(
         {
           ok: true,
+          platform: process.platform,
           version,
           port,
           tempProject,
@@ -254,9 +339,7 @@ async function main() {
       )
     );
   } finally {
-    killProcess(serverPid);
-    sleepSync(500);
-    removeDirectoryWithRetry(tempProject);
+    cleanUp(serverPid, tempProject);
   }
 }
 
