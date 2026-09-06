@@ -42,9 +42,11 @@ describe('file-collection', () => {
    * runner (`/var/folders/…` for a real `/private/var/folders/…`) and on a Windows one
    * (an 8.3 short form for the temp directory). The relative path then starts with
    * `../`, picomatch will not let `*`/`**` match a dot-leading segment, and every
-   * exclude pattern silently stops matching: `dist` here, `node_modules` in the tools
-   * that walk a user's workspace. A symlinked root reproduces that shape on any
-   * platform.
+   * exclude pattern silently stops matching — `dist` here, `node_modules` for any caller
+   * that walks a user's workspace. Both shipped callers happen to canonicalize the root
+   * first, so this was a precondition the function never stated rather than a live bug;
+   * a symlinked root reproduces the shape on any platform, so the contract is now the
+   * function's own.
    */
   it('applies exclude patterns when the workspace root is reached through a symlink', () => {
     const realRoot = createFixture();
