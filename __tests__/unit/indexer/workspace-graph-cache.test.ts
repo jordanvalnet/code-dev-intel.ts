@@ -257,6 +257,14 @@ describe('workspace graph cache', () => {
     write(root, 'src/b.ts', 'export const b = 1;\n');
     const goneSoon = write(root, 'src/gone.ts', "import './a';\nexport const gone = 1;\n");
     ageWorkspace(root);
+    // Both files get their stamp from this one Date object, never from the milliseconds
+    // `stat` reports back: a Date carries whole milliseconds, the kernel stores what it is
+    // handed at its own precision and rounding, and `new Date(stat.mtimeMs)` can therefore
+    // land a fraction of a millisecond away from the value already on disk — enough for
+    // two files stamped from two spellings of "the same instant" to disagree on one
+    // runner and agree on the next.
+    const oldStamp = new Date(Date.now() - 60_000);
+    utimesSync(goneSoon, oldStamp, oldStamp);
     const stamp = statSync(goneSoon);
 
     expect(edgeStrings(root)).toEqual(['src/gone.ts -> src/a.ts']);
@@ -266,7 +274,7 @@ describe('workspace graph cache', () => {
     // same length, same extension, same mtime to the millisecond — and different bytes.
     rmSync(goneSoon);
     const arrival = write(root, 'src/arrived.ts', "import './b';\nexport const came = 1;\n");
-    utimesSync(arrival, new Date(stamp.mtimeMs), new Date(stamp.mtimeMs));
+    utimesSync(arrival, oldStamp, oldStamp);
     expect(statSync(arrival).size).toBe(stamp.size);
     expect(statSync(arrival).mtimeMs).toBe(stamp.mtimeMs);
 
