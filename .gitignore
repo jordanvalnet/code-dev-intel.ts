@@ -15,3 +15,6 @@ Thumbs.db
 
 # Local-only commit guard (hook + private denylist), never shared.
 /.local-hooks/
+
+# Release-smoke pack output (CI and local `pnpm pack --pack-destination`).
+pack-output/

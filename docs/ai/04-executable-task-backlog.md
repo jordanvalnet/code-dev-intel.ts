@@ -145,6 +145,15 @@ Owner: tooling-agent
 - Report `invalidatedByProvenance`, `unwatchableFiles`, `persistedLoad` and `persistedSave` in the cache stats so the rule can be seen working.
 Status: done (2026-09-05)
 
+### T-021 Cross-platform CI matrix + multi-OS release smoke + per-OS perf budget
+Owner: tooling-agent
+- Run the `quality` gate on `ubuntu-latest`, `windows-latest` and `macos-latest` with `fail-fast: false`, so the ~21 `process.platform` branches (native ripgrep/ast-grep binaries, `realpath` and case handling, `LOCALAPPDATA` vs `XDG_CACHE_HOME`, spawn shapes and timeouts, atomic rename, line endings) are exercised by CI instead of by one machine. Coverage is produced once (ubuntu + Node 24).
+- Broaden the Node coverage the `engines.node` field implies: Node 22 and 24 run the full gate, Node 20 runs a `runtime-compat` gate (lint, type-check, build, `--self-test` of the COMPILED server) because the dev toolchain cannot run there - vitest 5 requires `^22.12 || ^24 || >=26`, and `node --experimental-strip-types`, which the CLI integration test spawns, only exists from 22.6.
+- Add a `release-smoke` job on the same three OS: pack the tarball a publish would produce (`pnpm pack` runs `prepack`), install it into a throwaway project, start the installed server on a free port and drive `/health` plus one `searchStruct`. This is where a `files` mistake, a missing per-platform optional dependency or a Windows-only path bug in the shipped code becomes visible.
+- Make the searchText perf budget platform-aware (`__tests__/unit/code-intel-mcp/perf.test.ts`): 2000 ms on linux/darwin, a calibrated Windows number, and `CODE_INTEL_PERF_BUDGET_MS` as an operator override. The test must REPORT the duration it measured, so the budget can be recalibrated from evidence rather than from feel.
+- Leave `perf-budget.yml`, `security.yml`, `pr-memory-reference.yml` and the `indexer-smoke`/`security` jobs on ubuntu: their thresholds and their tooling are calibrated for one runner.
+Status: done (2026-09-06)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.

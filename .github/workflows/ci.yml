@@ -9,8 +9,100 @@ on:
   pull_request:
 
 jobs:
+  # The package resolves native binaries (ripgrep, ast-grep) per platform and branches on
+  # `process.platform` for realpath/case handling, the user cache directory, spawn shapes,
+  # atomic rename and line endings. Running one runner could never have caught a mistake
+  # in any of that, so the gate runs on all three.
+  #
+  # `suite: runtime-compat` is the Node 20 entry: `engines.node` claims `>=18`, but the
+  # dev toolchain cannot run there (vitest 5 requires `^22.12 || ^24 || >=26`, and
+  # `node --experimental-strip-types` — which the CLI integration test spawns — only
+  # exists from 22.6). What that job can honestly prove is the thing a consumer on Node 20
+  # actually runs: the COMPILED package. So it lints, type-checks, builds and self-tests
+  # `dist/`, and leaves the vitest suite to the runtimes that support it.
   quality:
-    runs-on: ubuntu-latest
+    name: quality (${{ matrix.os }}, node ${{ matrix.node }}, ${{ matrix.suite }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 20
+            suite: runtime-compat
+          - os: ubuntu-latest
+            node: 22
+            suite: full
+          - os: ubuntu-latest
+            node: 24
+            suite: full
+            coverage: true
+          - os: windows-latest
+            node: 24
+            suite: full
+          - os: macos-latest
+            node: 24
+            suite: full
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.5
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type-check
+        run: pnpm type-check
+
+      - name: Run tests
+        if: matrix.suite == 'full'
+        run: pnpm test
+
+      - name: Build the publishable output
+        if: matrix.suite == 'runtime-compat'
+        run: pnpm build
+
+      # Runs the compiled server the way an installed copy runs it — no type stripping,
+      # no vitest — so the oldest Node this repository can exercise still proves that the
+      # published artifact boots, resolves its native binaries and answers a tool call.
+      - name: Self-test the compiled server
+        if: matrix.suite == 'runtime-compat'
+        run: node ./dist/code-intel-mcp/src/server.js --self-test
+
+      # Coverage once only: three OS times three Node versions would upload the same
+      # numbers five times over.
+      - name: Run coverage
+        if: matrix.coverage
+        run: pnpm vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary
+
+  # Packs the tarball `npm publish` would produce, installs it into a throwaway project on
+  # each OS and drives the installed CLI: this is where a `files` mistake, a missing
+  # per-platform optional dependency or a Windows-only path bug in the shipped code shows
+  # up, and none of it is visible from a source-tree test run.
+  release-smoke:
+    name: release-smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -32,11 +124,28 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run quality checks
-        run: pnpm ci:quality
+      # `pnpm pack` runs the package's own `prepack` (`pnpm build`), so the tarball is
+      # built exactly the way a publish would build it; no separate build step is needed.
+      - name: Pack the release tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf pack-output
+          mkdir -p pack-output
+          pnpm pack --pack-destination pack-output
+          ls -l pack-output
 
-      - name: Run coverage
-        run: pnpm vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary
+      # The tarball path stays REPOSITORY-RELATIVE across the `shell: bash` boundary and
+      # is made absolute by the script itself: on a Windows runner bash reports `pwd` as
+      # `/d/a/...`, which Node cannot resolve, so computing the absolute path in the shell
+      # is exactly what would break there.
+      - name: Install the tarball and smoke-test the installed server
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball="$(ls pack-output/*.tgz | head -n 1)"
+          test -n "$tarball"
+          node scripts/release-smoke.mjs --version="file:$tarball"
 
   indexer-smoke:
     runs-on: ubuntu-latest
@@ -96,7 +205,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          
+
           # Manually set OPENGREP_BIN for the runner in subsequent steps
           if [ -f "$HOME/.local/bin/opengrep" ]; then
             echo "OPENGREP_BIN=$HOME/.local/bin/opengrep" >> "$GITHUB_ENV"
@@ -105,7 +214,7 @@ jobs:
           elif [ -f "$HOME/.cargo/bin/opengrep" ]; then
             echo "OPENGREP_BIN=$HOME/.cargo/bin/opengrep" >> "$GITHUB_ENV"
           fi
-          
+
           # Debug info to verify installation in logs
           ls -R $HOME/.local/bin || true
           ls -R $HOME/.opengrep || true
