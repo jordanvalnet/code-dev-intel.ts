@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { request as httpRequest, type Server } from 'node:http';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startMcpSkeletonServer } from '../../../services/code-intel-mcp/src/server.ts';
+import { assertWithinWorkspace } from '../../../services/code-intel-mcp/src/safe-path.ts';
 
 let runningServer: Server | undefined;
 
@@ -170,7 +171,10 @@ describe('mcp security hardening', () => {
     // Operator opt-in: authorize anything under the OS temp dir (a sibling of
     // the configured default). Without this, the same request is rejected by
     // the boundary test above.
-    process.env.CODE_INTEL_ALLOWED_WORKSPACE_ROOTS = `${realpathSync(tmpdir())}/**`;
+    // assertWithinWorkspace canonicalizes exactly the way the server does; `fs.realpathSync`
+    // would leave a Windows temp directory in its 8.3 short form and the allowlist pattern
+    // would then never match the root the server resolves.
+    process.env.CODE_INTEL_ALLOWED_WORKSPACE_ROOTS = `${assertWithinWorkspace(tmpdir(), '.')}/**`;
     const { baseUrl, close } = await startServer(fixtureWorkspaceRoot);
 
     const response = await fetch(`${baseUrl}/tools/searchText`, {

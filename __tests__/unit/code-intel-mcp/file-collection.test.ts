@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectWorkspaceFiles } from '../../../services/code-intel-mcp/src/file-collection.ts';
@@ -14,18 +14,47 @@ function createFixture(): string {
   return root;
 }
 
+function collectFixture(workspaceRoot: string): string[] {
+  return collectWorkspaceFiles({
+    workspaceRoot,
+    includePaths: ['.'],
+    excludePatterns: ['**/dist/**'],
+    allowedExtensions: new Set(['.ts', '.js'])
+  });
+}
+
+function includes(files: string[], suffix: string): boolean {
+  return files.some((path) => path.endsWith(suffix.replaceAll('/', '\\')) || path.endsWith(suffix));
+}
+
 describe('file-collection', () => {
   it('collects allowed files and respects excludes', () => {
-    const workspaceRoot = createFixture();
-    const files = collectWorkspaceFiles({
-      workspaceRoot,
-      includePaths: ['.'],
-      excludePatterns: ['**/dist/**'],
-      allowedExtensions: new Set(['.ts', '.js'])
-    });
+    const files = collectFixture(createFixture());
 
-    expect(files.some((path) => path.endsWith('src\\a.ts') || path.endsWith('src/a.ts'))).toBe(true);
-    expect(files.some((path) => path.endsWith('src\\b.js') || path.endsWith('src/b.js'))).toBe(true);
-    expect(files.some((path) => path.endsWith('dist\\c.ts') || path.endsWith('dist/c.ts'))).toBe(false);
+    expect(includes(files, 'src/a.ts')).toBe(true);
+    expect(includes(files, 'src/b.js')).toBe(true);
+    expect(includes(files, 'dist/c.ts')).toBe(false);
+  });
+
+  /**
+   * The walk starts from the canonical root, so measuring relative paths from the
+   * caller's spelling breaks the moment the two differ — and they differ on every macOS
+   * runner (`/var/folders/…` for a real `/private/var/folders/…`) and on a Windows one
+   * (an 8.3 short form for the temp directory). The relative path then starts with
+   * `../`, picomatch will not let `*`/`**` match a dot-leading segment, and every
+   * exclude pattern silently stops matching: `dist` here, `node_modules` in the tools
+   * that walk a user's workspace. A symlinked root reproduces that shape on any
+   * platform.
+   */
+  it('applies exclude patterns when the workspace root is reached through a symlink', () => {
+    const realRoot = createFixture();
+    const linkRoot = join(mkdtempSync(join(tmpdir(), 'dev-intel-file-collection-link-')), 'workspace');
+    symlinkSync(realRoot, linkRoot, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const files = collectFixture(linkRoot);
+
+    expect(includes(files, 'src/a.ts')).toBe(true);
+    expect(includes(files, 'src/b.js')).toBe(true);
+    expect(includes(files, 'dist/c.ts')).toBe(false);
   });
 });
