@@ -15,6 +15,16 @@ function toUnixPath(value: string): string {
 }
 
 export function collectWorkspaceFiles(options: CollectWorkspaceFilesOptions): string[] {
+  // The walk starts from the CANONICAL root (`assertWithinWorkspace` realpaths it), so
+  // every path it measures must be measured from that same spelling. Measuring from the
+  // caller's spelling is silently wrong wherever the two differ — macOS reports a temp
+  // directory as `/var/folders/…` for a real `/private/var/folders/…`, and a Windows
+  // temp directory is often handed out in its 8.3 short form — and it does not merely
+  // shift the strings: the relative path then starts with `../`, and picomatch does not
+  // let `*` or `**` match a segment that begins with a dot, so EVERY exclude pattern
+  // stops matching at once and `node_modules`, `dist`, `coverage` and the caller's
+  // `.gitignore` entries are all walked and returned.
+  const workspaceRoot = assertWithinWorkspace(options.workspaceRoot, '.');
   const includePaths = options.includePaths && options.includePaths.length > 0 ? options.includePaths : ['.'];
   const excludeMatcher = picomatch(options.excludePatterns ?? []);
   const result: string[] = [];
@@ -34,17 +44,17 @@ export function collectWorkspaceFiles(options: CollectWorkspaceFilesOptions): st
 
       if (lstat.isSymbolicLink()) {
         const realEntryPath = realpathSync(fullPath);
-        if (!isPathWithinWorkspace(options.workspaceRoot, realEntryPath)) {
+        if (!isPathWithinWorkspace(workspaceRoot, realEntryPath)) {
           continue;
         }
       }
 
-      if (!isPathWithinWorkspace(options.workspaceRoot, fullPath)) {
+      if (!isPathWithinWorkspace(workspaceRoot, fullPath)) {
         continue;
       }
 
       const stats = statSync(fullPath);
-      const relativePath = toUnixPath(relative(options.workspaceRoot, fullPath));
+      const relativePath = toUnixPath(relative(workspaceRoot, fullPath));
 
       if (stats.isDirectory()) {
         // Hidden directories and nested git checkouts (worktrees) are never scanned,
@@ -68,7 +78,7 @@ export function collectWorkspaceFiles(options: CollectWorkspaceFilesOptions): st
   }
 
   for (const includePath of includePaths) {
-    const safePath = assertWithinWorkspace(options.workspaceRoot, includePath);
+    const safePath = assertWithinWorkspace(workspaceRoot, includePath);
     const stats = statSync(safePath);
     if (stats.isDirectory()) {
       walk(safePath);

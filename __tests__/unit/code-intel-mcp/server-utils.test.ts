@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,10 +10,22 @@ import {
   parseAllowedWorkspaceRootsFromEnv,
   resolveAndValidateWorkspaceRoot
 } from '../../../services/code-intel-mcp/src/server-utils.ts';
+import { assertWithinWorkspace } from '../../../services/code-intel-mcp/src/safe-path.ts';
+
+/**
+ * The canonical spelling the server itself will produce, taken from the server's own
+ * canonicalizer rather than from `fs.realpathSync`. The JS implementation resolves
+ * symlinks but hands back the CALLER's spelling of every segment, so on Windows it
+ * leaves the temp directory in its 8.3 short form while the server (which asks the
+ * operating system, via the native variant) expands it - two strings for one directory,
+ * and every assertion below compares strings.
+ */
+function canonical(pathValue: string): string {
+  return assertWithinWorkspace(pathValue, '.');
+}
 
 function makeDir(prefix: string): string {
-  // realpathSync so the path matches the canonical form resolveAndValidate produces.
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return canonical(mkdtempSync(join(tmpdir(), prefix)));
 }
 
 describe('parseAllowedWorkspaceRootsFromEnv', () => {
@@ -88,7 +100,7 @@ describe('resolveAndValidateWorkspaceRoot — allowlist bypass', () => {
     // Exact path is a valid (literal) pattern; also covers the glob case below.
     expect(resolveAndValidateWorkspaceRoot(outside, defaultRoot, [outside])).toBe(outside);
     expect(
-      resolveAndValidateWorkspaceRoot(outside, defaultRoot, [`${realpathSync(tmpdir())}/**`])
+      resolveAndValidateWorkspaceRoot(outside, defaultRoot, [`${canonical(tmpdir())}/**`])
     ).toBe(outside);
   });
 
@@ -104,7 +116,7 @@ describe('resolveAndValidateWorkspaceRoot — allowlist bypass', () => {
     const defaultRoot = makeDir('su-default-');
     const missing = join(defaultRoot, 'does-not-exist-xyz');
     try {
-      resolveAndValidateWorkspaceRoot(missing, defaultRoot, [`${realpathSync(tmpdir())}/**`]);
+      resolveAndValidateWorkspaceRoot(missing, defaultRoot, [`${canonical(tmpdir())}/**`]);
       throw new Error('expected throw');
     } catch (error) {
       expect(error).toBeInstanceOf(HttpError);
