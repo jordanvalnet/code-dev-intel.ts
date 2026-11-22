@@ -328,3 +328,13 @@ LOCK: none
 - Risks: none known. No other test in the file ages a workspace again after an edit: an edit left fresh is re-read through the recency margin.
 - Next: Merge, then the 0.6.0 release (see the T-024 entry, Next).
 - Blockers: none
+
+## [2026-11-22T23:09:15Z] ClaudeOpus | T-027
+- Status: done
+- Summary: Designing an unattended caller of `pnpm security:patch` raised three points the contract left implicit. `docs/releasing.md` now states them: the pull request description (`--pr-body`) and the memory entry hold no local path, like the JSON report; `--check` exits `0` on a clean audit and `2` on an advisory (`vulnerable`), so it serves alone as the detection step; and a lightweight tag, as the GitHub API creates, is accepted like an annotated one. The no-local-path test now covers the pull request description and the memory entry as well as the report.
+- Decisions: (1) Lightweight tags are intended: `verify` reads only `GITHUB_REF_NAME` and `GITHUB_SHA`, the version check and `git merge-base --is-ancestor` are about the commit, and provenance attests the commit too. The annotated tag in the manual procedure is a convention, not a requirement. (2) No code change: the three points were already true (`formatMemoryEntry` and `formatPrBody` print package names, versions, advisory IDs and URLs, repository-relative file names, `process.platform` and the Node version; `exitCodeFor` returns 2 for `vulnerable`, already tested). (3) Branch protection for `main` and `v*` tags is a maintainer setting, left to the maintainer: the manual release commit is pushed directly to `main` today, so a ruleset that requires pull requests needs a maintainer bypass or a release pull request.
+- Files: docs/releasing.md, __tests__/unit/security/security-patch.test.ts, docs/ai/04-executable-task-backlog.md, docs/ai/memory/AGENT_MEMORY.md
+- Evidence: Windows, Node 24: `pnpm lint` exit 0, `pnpm type-check` exit 0, `pnpm test` 26 files / 362 tests passed; `security-patch.test.ts` 24 / 24 with the extended test, which checks that the report, `pr-body.md` and the appended memory entry contain neither the fixture root (both separators) nor the temporary directory.
+- Risks: none known.
+- Next: Merge after T-026 (this branch is stacked on it).
+- Blockers: none

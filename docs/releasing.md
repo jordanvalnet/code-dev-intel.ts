@@ -72,7 +72,7 @@ pnpm's `minimumReleaseAge` (24 hours) applies: a patched version published less 
 
 ### Report and exit code
 
-stdout carries one JSON report and nothing else. It holds package names, versions, advisory identifiers and URLs, and repository-relative file names, so it can be posted as it is. Command output goes to stderr, which can contain local paths and must not be posted.
+stdout carries one JSON report and nothing else. It holds package names, versions, advisory identifiers and URLs, and repository-relative file names, so it can be posted as it is. The pull request description written by `--pr-body` and the memory entry hold the same kind of data, plus the operating system and Node version of the gates, and no local path either. Command output goes to stderr, which can contain local paths and must not be posted.
 
 | `status` | Meaning |
 | --- | --- |
@@ -91,7 +91,7 @@ The other fields:
 - `release` is `{ needed, version, blockedBy }`.
 - `needsHuman` is true when something is left for a person: advisories still open, a failed gate, or a release that `[Unreleased]` blocks.
 
-The exit code is `0` when there is nothing left to do (`clean`, or `patched` with no person needed), `2` when the report needs attention, and `1` on an error, such as a registry that cannot be reached or output that cannot be read.
+The exit code is `0` when there is nothing left to do (`clean`, or `patched` with no person needed), `2` when the report needs attention, and `1` on an error, such as a registry that cannot be reached or output that cannot be read. `--check` therefore exits `0` on a clean audit and `2` when it finds an advisory (`vulnerable`), so it works on its own as a detection step.
 
 ### Running it unattended
 
@@ -99,5 +99,5 @@ A caller that runs it on a schedule follows these steps:
 
 1. Work in a fresh clone of `main`, run `pnpm install --frozen-lockfile`, then run `pnpm security:patch --pr-body=<file>`.
 2. Commit `changedFiles` with `commitMessage`, and open a pull request titled `prTitle` with that body. `lockfileOnly: true` is the only case where merging without review is considered safe: nothing a consumer installs changes.
-3. When `release.version` is set, push the tag `v<version>` on the merged commit. `publish.yml` then waits for the maintainer's approval as described above.
+3. When `release.version` is set, push the tag `v<version>` on the merged commit. A lightweight tag, such as one created through the GitHub API, is accepted like an annotated one: `verify` checks the commit the tag points to, not the tag object. `publish.yml` then waits for the maintainer's approval as described above.
 4. Never post stderr, and never post a failure's command output anywhere public.
