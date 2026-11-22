@@ -401,9 +401,12 @@ describe('workspace graph cache', () => {
     // the assembled graph has to be invalidated here or it is served stale for good.
     // The file is aged past the recency margin first, so the walk really does take the
     // "nothing changed" path: an agent that edits, asks dependencyGraph, then asks
-    // impactedFiles a few seconds later is exactly this sequence.
+    // impactedFiles a few seconds later is exactly this sequence. It is aged to a different
+    // moment than the first time: the new content has the same size, so two agings within
+    // the same millisecond would give it the old `(mtime, size)` and the cache would rightly
+    // keep the old parse.
     write(root, 'src/main.ts', "import { b } from './b';\nexport const main = b;\n");
-    ageWorkspace(root);
+    ageWorkspace(root, 30);
     expect(getModuleFacts(root, mainPath).imports.map((entry) => entry.specifier)).toEqual(['./b']);
 
     expect(edgeStrings(root)).toEqual(['src/main.ts -> src/b.ts']);

@@ -318,3 +318,13 @@ LOCK: none
 - Risks: The publish workflow has not run yet: it is proven by the 0.6.0 release, and the OIDC exchange can only be tested there. The npm trusted publisher is a maintainer setting not yet made, and it expires if no publish happens within two days of its creation. actionlint was not run on the workflows. 0.5.1 is tagged but not on npm, and predates `publish.yml`; if it is published after 0.6.0 without `--tag`, it takes `latest` back.
 - Next: Merge. The maintainer adds the npm trusted publisher (`docs/releasing.md`, One-time setup) and publishes 0.5.1 first if it is to be published at all. Then commit `release: v0.6.0`, push the tag, and approve the run.
 - Blockers: none
+
+## [2026-11-22T22:57:35Z] ClaudeOpus | T-026
+- Status: done
+- Summary: The `ci` run on the T-024 merge commit failed in one leg (ubuntu, Node 24) on `does not serve a graph built before a dependency-graph read picked up an edit`: `getModuleFacts` returned `['./a']` instead of `['./b']`. The test is racy, not the cache. It aged the workspace twice to `Date.now() - 60 s`, and the edit it checks (`./a` to `./b`) keeps the file size, so when both agings fall in the same millisecond the edited file carries the old `(mtime, size)`, and keeping the old parse is the cache's documented behaviour. The second aging now uses 30 s: a different stamp every time, still past the 2 s recency margin, so the walk still takes the "nothing changed" path the test is about.
+- Decisions: (1) Fixed in the test, not the cache: same mtime and same size is, by design, an unchanged file once it is older than `MTIME_SAFETY_MS`. (2) No changelog line: the package does not change, as for the earlier test fix of the rename check.
+- Files: __tests__/unit/indexer/workspace-graph-cache.test.ts, docs/ai/04-executable-task-backlog.md, docs/ai/memory/AGENT_MEMORY.md
+- Evidence: Rerunning the failed job on the same commit: all 9 `ci` jobs passed. A temporary test that stamps both versions with the same Date, on Windows, Node 24: the cache returns `['./a']`, the CI failure, reproduced deterministically (removed afterwards). After the fix, on Windows, Node 24: `pnpm lint` exit 0, `pnpm type-check` exit 0, `pnpm test` 26 files / 362 tests passed, and `workspace-graph-cache.test.ts` 18 / 18 on 10 consecutive runs.
+- Risks: none known. No other test in the file ages a workspace again after an edit: an edit left fresh is re-read through the recency margin.
+- Next: Merge, then the 0.6.0 release (see the T-024 entry, Next).
+- Blockers: none

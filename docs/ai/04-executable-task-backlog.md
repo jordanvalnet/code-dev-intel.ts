@@ -186,6 +186,11 @@ Owner: security-patch
 - Not a one-off task: the ID every `pnpm security:patch` record uses. Each run that changes something appends its own memory entry and opens its own pull request, following `docs/releasing.md`.
 Status: recurring
 
+### T-026 Graph cache test race on an unchanged-size edit
+Owner: tooling-agent
+- `does not serve a graph built before a dependency-graph read picked up an edit` aged the workspace twice to `Date.now() - 60 s`, and the edit it checks keeps the file size. When both agings fall in the same millisecond, the edited file gets the old `(mtime, size)` and the cache rightly keeps the old parse: the test failed once on ubuntu, Node 24, and passed on the rerun. Age the second write to a different moment, still past the recency margin, so the test checks what it means to check every time.
+Status: done (2026-11-22)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.
