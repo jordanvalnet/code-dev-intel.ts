@@ -25,7 +25,7 @@ services:
 
   search-optional:
     profiles: ["search-optional"]
-    image: alpine:3.23
+    image: alpine:3.24
     container_name: code-dev-intel-search-optional
     command:
       [
@@ -38,7 +38,7 @@ services:
 
   zoekt-webserver:
     profiles: ["zoekt-optional"]
-    image: sourcegraph/zoekt-webserver:latest
+    image: sourcegraph/zoekt-webserver:0.0.0-20250506123554-490422d1adb4@sha256:34c77a62bcafc41ce3ee193e44f42aa84690d9ec51b953e7efae4dfdfae80aff
     container_name: code-dev-intel-zoekt-webserver
     command: ["-listen", ":6070", "-index", "/data/index"]
     ports:
@@ -50,7 +50,7 @@ services:
 
   zoekt-index:
     profiles: ["zoekt-optional"]
-    image: sourcegraph/zoekt-indexserver:latest
+    image: sourcegraph/zoekt-indexserver:0.0.0-20250506123554-490422d1adb4@sha256:0ab695c0c0fb48fa52802b17829d808c2840545a6d0f8b1db8486e6480f16c4f
     container_name: code-dev-intel-zoekt-index
     working_dir: /workspace
     command:

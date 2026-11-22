@@ -1,11 +1,16 @@
-FROM node:24.20.0-alpine AS base
+FROM node:24.22.3-alpine AS base
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
+# pnpm-workspace.yaml carries the pnpm settings, which pnpm 11+ reads nowhere else, among
+# them the dependency build scripts an install may run. The server runs from its sources,
+# which import production dependencies only.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN corepack enable && pnpm install --frozen-lockfile --prod
 
-COPY . .
+COPY --chown=node:node . .
+
+USER node
 
 EXPOSE 4545
 

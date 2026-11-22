@@ -1,0 +1,13 @@
+# pnpm settings for this single-package repository. Since pnpm 11 they are read from
+# here only: the `pnpm` field of package.json and non-auth `.npmrc` settings are ignored.
+#
+# pnpm 12 defaults that this repository relies on and does not repeat: newly published
+# versions are not resolved for 24 hours (`minimumReleaseAge: 1440`), git or tarball
+# sub-dependencies are refused (`blockExoticSubdeps: true`), and an install fails on a
+# dependency build script that is not listed below (`strictDepBuilds: true`).
+
+# Both postinstall scripts only fetch or link a binary that this package already gets from
+# per-platform packages resolved with `createRequire`, so neither is allowed to run.
+allowBuilds:
+  '@ast-grep/cli': false
+  esbuild: false

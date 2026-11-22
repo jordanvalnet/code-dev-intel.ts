@@ -277,9 +277,15 @@ async function main() {
 
     writeFileSync(resolve(tempProject, 'sample.ts'), ['export interface SmokeTestShape {', '  id: string;', '  label: string;', '}', '', 'const smokeValue = 42;'].join('\n'));
 
-    // --ignore-workspace: the temporary project sits in the OS temp directory, and a
-    // pnpm workspace file anywhere above it would silently make this a workspace member.
-    runCommand('pnpm', ['install', '--ignore-workspace'], { cwd: tempProject }, 'pnpm install');
+    // What a consumer on pnpm 11+ has to write: `@ast-grep/cli` still ships a postinstall,
+    // and `strictDepBuilds` fails the install on any build script it is not told about.
+    // This package resolves the ast-grep binary from its per-platform package instead, so
+    // the script is declined rather than allowed. The file also makes the temporary
+    // project its own workspace root, so no pnpm workspace above the OS temp directory can
+    // claim it as a member.
+    writeFileSync(resolve(tempProject, 'pnpm-workspace.yaml'), ['allowBuilds:', "  '@ast-grep/cli': false", ''].join('\n'));
+
+    runCommand('pnpm', ['install'], { cwd: tempProject }, 'pnpm install');
 
     const ensureResult = runCommand(
       'pnpm',

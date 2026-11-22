@@ -154,6 +154,14 @@ Owner: tooling-agent
 - Leave `perf-budget.yml`, `security.yml`, `pr-memory-reference.yml` and the `indexer-smoke`/`security` jobs on ubuntu: their thresholds and their tooling are calibrated for one runner.
 Status: done (2026-09-06)
 
+### T-023 Dependency and supply-chain refresh
+Owner: tooling-agent
+- Bring every dependency to its latest release and `pnpm audit` to zero at every severity. A major that is a port rather than a version bump (TypeScript 7) is recorded, not forced.
+- Move pnpm to its latest major, with its settings in `pnpm-workspace.yaml`, and drop the overrides nothing needs any more.
+- Pin the CI supply chain: actions by commit SHA, OpenGrep by version with signature verification, least-privilege `permissions`, and a weekly dependency audit so a new advisory does not wait for a pull request.
+- Pin and harden the Docker files: versioned base images instead of `latest`, production dependencies only, a non-root user, and a build context without logs, caches or credentials.
+Status: done (2026-11-22)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.

@@ -72,6 +72,13 @@ Requirements:
 - pnpm `>=10`
 - A TypeScript or JavaScript repository where semantic navigation is useful
 
+With pnpm 11 or later, the install stops on `ERR_PNPM_IGNORED_BUILDS` until your `pnpm-workspace.yaml` says what to do with the `@ast-grep/cli` postinstall script. This package does not need it (it takes the ast-grep binary from the per-platform package), so decline it:
+
+```yaml
+allowBuilds:
+  '@ast-grep/cli': false
+```
+
 ## Quick Start
 
 ### Recommended bootstrap command
