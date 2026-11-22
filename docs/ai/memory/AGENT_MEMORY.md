@@ -298,3 +298,13 @@ LOCK: none
 - Risks: The Docker image was not built (no Docker daemon was running) and CI builds none, so the Dockerfile changes are unproven. Independently of this task, `searchStruct` cannot work in that Alpine image: `@ast-grep/cli-linux-x64-gnu` declares `libc: glibc`, pnpm skips it on musl, and `resolveAstGrepPlatformPackage` never looks for a `-musl` package. GitHub disables scheduled workflows in a public repository after 60 days without activity. TypeScript 7 support is not started.
 - Next: Fix ast-grep on musl (resolver plus the two `-musl` optional dependencies), with a CI job that builds the Docker image and self-tests it.
 - Blockers: none
+
+## [2026-11-22T11:54:52Z] ClaudeOpus | T-022
+- Status: done
+- Summary: The maintainer raised the Node floor from 20 to 22.12 before this task merged. `engines.node` is `>=22.12.0`, the Node 20 `runtime-compat` CI job is removed, and the Node 22 entry builds and self-tests the compiled package on top of the full suite. The branch was rebased onto `main` after T-023 and the v0.5.1 release, as one commit plus this change.
+- Decisions: (1) `>=22.12.0` rather than `>=22.0.0`: 22.12 is what vitest 5 already required, so one floor now covers running and developing, and nothing has ever tested 22.0-22.11. (2) The compiled-package self-test stays, moved to the floor entry: the full suite exercises the sources, the self-test exercises what a consumer installs. (3) The standalone pnpm that T-023 gave the Node 20 job goes with that job; every quality entry now runs pnpm 12 on its own Node. (4) The released 0.5.1 notes are left as published (they describe `engines.node >=18.0.0`, which is what 0.5.1 ships); the change is listed under `[Unreleased]` as breaking, for the next minor release.
+- Files: package.json, .github/workflows/ci.yml, README.md, AGENTS.md, CHANGELOG.md, docs/ai/04-executable-task-backlog.md, docs/ai/memory/AGENT_MEMORY.md
+- Evidence: Gates on Windows, Node 24, pnpm 12.21.0: `pnpm lint` exit 0, `pnpm type-check` exit 0, `pnpm test` 25 files / 338 tests passed. `ci.yml` parses as YAML.
+- Risks: Consumers on Node 20 or older are refused under `engine-strict` and warned otherwise. That is breaking, so it ships in a minor release (0.6.0), not a patch.
+- Next: Release 0.6.0 once this is merged.
+- Blockers: none
