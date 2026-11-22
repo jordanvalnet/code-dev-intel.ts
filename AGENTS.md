@@ -29,6 +29,8 @@ Evidence names the command, the operating system, the Node version and the resul
 
 One short-lived branch per task (`task/T-0NN-short-name`) and one pull request per task, against `main`. CI runs on Ubuntu, Windows and macOS (`.github/workflows/ci.yml`).
 
+Releases are a `release: vX.Y.Z — …` commit on `main` and a pushed `vX.Y.Z` tag. `.github/workflows/publish.yml` publishes the tag once a maintainer approves it. Never run `pnpm publish` yourself. The procedure is in `docs/releasing.md`.
+
 ## Commands
 
 Node 22.12 or later, both to develop on this repository (vitest 5, `node --experimental-strip-types`) and to run the compiled package.
@@ -41,6 +43,7 @@ Node 22.12 or later, both to develop on this repository (vitest 5, `node --exper
 | `pnpm indexer:smoke` | Smoke test of the indexer |
 | `pnpm release:smoke` | Installs a packed tarball into a throwaway project and drives the installed server |
 | `pnpm security:scan` | Opengrep scan with the rules in `security/` |
+| `pnpm security:patch` | Fixes what `pnpm audit` reports when no judgement call is needed, runs the gates and records the change (`docs/releasing.md`) |
 
 ## Where to find what
 
@@ -50,3 +53,4 @@ Node 22.12 or later, both to develop on this repository (vitest 5, `node --exper
 | Context and target architecture | `docs/ai/00-context.md`, `docs/ai/01-target-architecture.md` |
 | Agent orchestration and prompts | `docs/ai/02-agent-orchestration.md`, `docs/ai/05-agent-prompts.md` |
 | What was done and decided, task by task | `docs/ai/memory/AGENT_MEMORY.md`, `CHANGELOG.md` |
+| Releasing, publishing, security patches | `docs/releasing.md` |

@@ -1,0 +1,186 @@
+name: publish
+
+# Publishes a release to npm when its `vX.Y.Z` tag is pushed, with trusted publishing
+# (OIDC): no npm token exists anywhere, and the registry records a provenance attestation
+# that ties the package to this run and to the tagged commit.
+#
+# `verify` holds no credential and fails a wrong tag before anyone is asked anything.
+# `publish` runs in the `npm` environment, which waits for a maintainer to approve the
+# deployment (from the run page or the GitHub Mobile notification), then uploads the exact
+# tarball `verify` tested. A failed run is retried with "Re-run failed jobs", which keeps
+# the tag and the commit. Procedure: docs/releasing.md.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions: {}
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      dist-tag: ${{ steps.release.outputs.dist-tag }}
+      pnpm-version: ${{ steps.release.outputs.pnpm-version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+
+    steps:
+      # Full history, so the tagged commit can be checked against `main`.
+      - name: Checkout the tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The pnpm version comes from `packageManager` in package.json.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      # No dependency cache in a release workflow: a cache another workflow wrote is an
+      # input nothing here can verify.
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Check the tag, the changelog and the registry
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the package.json version $version"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main"
+            exit 1
+          fi
+          if ! grep -q "^## $version - " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## $version - <date>' section"
+            exit 1
+          fi
+          unreleased="$(awk '/^## \[Unreleased\]/ { inside = 1; next } /^## / { inside = 0 } inside' CHANGELOG.md | tr -d '[:space:]')"
+          if [ -n "$unreleased" ]; then
+            echo "::error::CHANGELOG.md still lists changes under [Unreleased]: they would ship in $version without being announced"
+            exit 1
+          fi
+          status="$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$name/$version")"
+          if [ "$status" = "200" ]; then
+            echo "::error::$name@$version is already on npm"
+            exit 1
+          elif [ "$status" != "404" ]; then
+            echo "::error::the npm registry answered $status for $name@$version"
+            exit 1
+          fi
+          # `latest` only moves forward: a fix released for an older line gets its own tag.
+          latest="$(curl -fsS "https://registry.npmjs.org/-/package/$name/dist-tags" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).latest ?? "0.0.0"')"
+          dist_tag="$(VERSION="$version" LATEST="$latest" node -p '
+            const [a, b] = [process.env.VERSION, process.env.LATEST].map((v) => v.split(".").map(Number));
+            (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) > 0 ? "latest" : `release-${a[0]}.${a[1]}`
+          ')"
+          {
+            echo "version=$version"
+            echo "dist-tag=$dist_tag"
+            echo "pnpm-version=$(node -p "require('./package.json').packageManager.split('@')[1]")"
+          } >> "$GITHUB_OUTPUT"
+          echo "Publishing $name@$version under the dist-tag '$dist_tag' (latest is $latest)."
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify the registry signatures of the installed packages
+        run: pnpm audit signatures
+
+      - name: Audit the runtime dependencies
+        run: pnpm audit --prod --audit-level=moderate
+
+      - name: Lint, type-check and test
+        run: pnpm ci:quality
+
+      # `pnpm pack` runs the package's own `prepack` (`pnpm build`).
+      - name: Pack the release tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release"
+          pnpm pack --pack-destination "$RUNNER_TEMP/release"
+          shopt -s nullglob
+          tarballs=("$RUNNER_TEMP"/release/*.tgz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "::error::expected one tarball, found ${#tarballs[@]}"
+            exit 1
+          fi
+          echo "tarball=$(basename "${tarballs[0]}")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "${tarballs[0]}" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Install the tarball and smoke-test the installed server
+        shell: bash
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: node scripts/release-smoke.mjs --version="file:$RUNNER_TEMP/release/$TARBALL"
+
+      - name: Keep the tested tarball for the publish job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-tarball
+          path: ${{ runner.temp }}/release/${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/code-dev-intel.ts/v/${{ needs.verify.outputs.version }}
+    # The OIDC token is the only credential this job gets, and nothing here checks out or
+    # runs the repository's code.
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: ${{ needs.verify.outputs.pnpm-version }}
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Download the tested tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-tarball
+          path: ${{ runner.temp }}/release
+
+      - name: Check it is the tarball verify tested
+        shell: bash
+        working-directory: ${{ runner.temp }}/release
+        env:
+          TARBALL: ${{ needs.verify.outputs.tarball }}
+          SHA256: ${{ needs.verify.outputs.sha256 }}
+        run: echo "$SHA256  $TARBALL" | sha256sum --check --strict
+
+      - name: Publish with trusted publishing and provenance
+        shell: bash
+        working-directory: ${{ runner.temp }}/release
+        env:
+          TARBALL: ${{ needs.verify.outputs.tarball }}
+          DIST_TAG: ${{ needs.verify.outputs.dist-tag }}
+        run: pnpm publish "./$TARBALL" --provenance --access public --tag "$DIST_TAG" --no-git-checks --ignore-scripts

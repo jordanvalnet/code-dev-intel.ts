@@ -170,6 +170,22 @@ Owner: tooling-agent
 - Pin and harden the Docker files: versioned base images instead of `latest`, production dependencies only, a non-root user, and a build context without logs, caches or credentials.
 Status: done (2026-11-22)
 
+### T-024 Release pipeline: CI publishing and security patches
+Owner: tooling-agent
+- Publish from CI only: `.github/workflows/publish.yml` on a pushed `vX.Y.Z` tag. One job, without credentials, refuses a tag that does not match `package.json`, is not on `main`, has no changelog section, would ship `[Unreleased]` entries or is already on npm. It also verifies registry signatures, audits the runtime dependencies, runs the quality gates, and packs and smoke-tests the tarball. A second job, in the `npm` environment, waits for one maintainer approval, then publishes that same tarball with npm trusted publishing (OIDC) and provenance. No npm token anywhere.
+- Add `pnpm security:patch`, the deterministic half of an unattended security patch:
+  - audit, then `pnpm audit --fix update`;
+  - overrides only when every advisory left is in a transitive development dependency;
+  - the gates, then the record (memory entry, plus a patch release when a range a consumer installs moved and `[Unreleased]` is empty);
+  - a JSON report with no local paths, saying when a person is needed.
+- Document the release procedure, the one-time maintainer setup and the command's contract in `docs/releasing.md`, and validate the workflow with the 0.6.0 release.
+Status: done (2026-11-22)
+
+### T-025 Security patch (recurring)
+Owner: security-patch
+- Not a one-off task: the ID every `pnpm security:patch` record uses. Each run that changes something appends its own memory entry and opens its own pull request, following `docs/releasing.md`.
+Status: recurring
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.

@@ -58,6 +58,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "security:scan": "node --experimental-strip-types ./services/security/opengrep-runner.ts",
+    "security:patch": "node --experimental-strip-types ./services/security/security-patch.ts",
     "pr:check-memory-reference": "node --experimental-strip-types ./services/governance/pr-memory-reference-check.ts",
     "ci:quality": "pnpm lint && pnpm type-check && pnpm test",
     "ci:security": "pnpm security:scan",
