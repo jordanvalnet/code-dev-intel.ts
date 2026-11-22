@@ -4,6 +4,10 @@ All notable changes to this package are documented in this file.
 
 ## [Unreleased]
 
+## 0.6.0 - 2026-11-22
+
+Node 22.12 or later is now required (breaking, details under Changed). This is the first release published by CI, with a provenance attestation that `npm audit signatures` verifies. No change to the tools or their output. 0.5.1 was tagged but never published to npm: its security fixes reach npm with this release.
+
 ### Changed
 
 - **Breaking: `engines.node` is now `>=22.12.0` (was `>=18.0.0`).** Node 18 and Node 20 are end-of-life (Node 20 since 2026-04-30), and Node 18 was never tested. Node 22.12 is also what the toolchain already needed: vitest 5 and pnpm 11+ do not run below it, and `@ast-grep/cli` 0.51 requires Node 20. One floor now covers running the package and developing on it.
