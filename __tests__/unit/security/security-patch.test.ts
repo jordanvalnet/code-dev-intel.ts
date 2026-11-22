@@ -536,14 +536,22 @@ describe('runSecurityPatch', () => {
     expect(repo.read('pr-body.md')).toContain('Still open: [GHSA-gggg-hhhh-iiii]');
   });
 
-  it('keeps every local path out of the report', () => {
+  it('keeps every local path out of the report, the pull request body and the memory entry', () => {
     const repo = fixture({ audits: [[PROD_DIRECT], []], onFix: { update: bumpDirect('dependencies', 'left-pad', '1.3.1') } });
 
-    const serialized = JSON.stringify(repo.run());
+    const report = repo.run();
+    const memory = repo.read('docs/ai/memory/AGENT_MEMORY.md');
+    const published = [JSON.stringify(report), repo.read('pr-body.md'), memory.slice(MEMORY_CRLF.length)];
 
-    expect(serialized).not.toContain(repo.root);
-    expect(serialized).not.toContain(repo.root.replaceAll('\\', '/'));
-    expect(serialized).not.toContain(tmpdir());
+    expect(memory.startsWith(MEMORY_CRLF)).toBe(true);
+    expect(published[1]).toContain('## Shared memory');
+    expect(published[2]).toContain('security-patch | T-025');
+    for (const text of published) {
+      expect(text).not.toContain(repo.root);
+      expect(text).not.toContain(repo.root.replaceAll('\\', '/'));
+      expect(text).not.toContain(tmpdir());
+      expect(text).not.toContain(tmpdir().replaceAll('\\', '/'));
+    }
   });
 
   it('refuses to record without the gates', () => {

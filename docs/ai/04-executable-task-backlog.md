@@ -191,6 +191,12 @@ Owner: tooling-agent
 - `does not serve a graph built before a dependency-graph read picked up an edit` aged the workspace twice to `Date.now() - 60 s`, and the edit it checks keeps the file size. When both agings fall in the same millisecond, the edited file gets the old `(mtime, size)` and the cache rightly keeps the old parse: the test failed once on ubuntu, Node 24, and passed on the rerun. Age the second write to a different moment, still past the recency margin, so the test checks what it means to check every time.
 Status: done (2026-11-22)
 
+### T-027 `security:patch` contract: what an unattended caller can rely on
+Owner: tooling-agent
+- State in `docs/releasing.md` what a caller that runs `pnpm security:patch` on a schedule needs to know and the docs left implicit: the pull request description and the memory entry hold no local path, like the report; `--check` exits `2` when it finds an advisory; and a lightweight tag is accepted, because `verify` checks the commit the tag points to.
+- Extend the no-local-path test from the report to the pull request description and the memory entry.
+Status: done (2026-11-22)
+
 ## Agent execution card (for each task)
 
 - Read: context + architecture + memory protocol.
