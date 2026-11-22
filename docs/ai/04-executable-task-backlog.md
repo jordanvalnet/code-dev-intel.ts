@@ -154,6 +154,14 @@ Owner: tooling-agent
 - Leave `perf-budget.yml`, `security.yml`, `pr-memory-reference.yml` and the `indexer-smoke`/`security` jobs on ubuntu: their thresholds and their tooling are calibrated for one runner.
 Status: done (2026-09-06)
 
+### T-022 AGENTS.md for AI agents + public-repository rule + real Node requirement
+Owner: docs-agent
+- Add an `AGENTS.md` for AI coding agents: what the package is, the public-repository rule, the CONTRIBUTING workflow (backlog order, shared memory, pull request references, `pnpm` only, task branches, definition of done) and the real commands.
+- Write the public-repository rule into `CONTRIBUTING.md`, `docs/ai/03-shared-memory-protocol.md` and the PR template: no personal data, machine details or references to private projects in the code, docs, shared memory, changelog, commits or pull requests. Redact the machine details already in the memory file, the one edit to a past entry the protocol allows.
+- State the three pull request references where agents read them: the task ID, the memory entry's UTC timestamp and the memory file, which `pr-memory-reference` checks.
+- Move `engines.node` to `>=20.0.0`, the floor CI proves for the compiled package (see T-021 Next), and split the README requirement into running the package (Node 20+) and developing on it (Node 22.12+).
+Status: done (2026-11-22)
+
 ### T-023 Dependency and supply-chain refresh
 Owner: tooling-agent
 - Bring every dependency to its latest release and `pnpm audit` to zero at every severity. A major that is a port rather than a version bump (TypeScript 7) is recorded, not forced.

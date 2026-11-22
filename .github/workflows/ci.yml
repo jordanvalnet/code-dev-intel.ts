@@ -17,7 +17,7 @@ jobs:
   # atomic rename and line endings. Running one runner could never have caught a mistake
   # in any of that, so the gate runs on all three.
   #
-  # `suite: runtime-compat` is the Node 20 entry: `engines.node` claims `>=18`, but the
+  # `suite: runtime-compat` is the Node 20 entry, the floor `engines.node` declares. The
   # dev toolchain cannot run there (vitest 5 requires `^22.12 || ^24 || >=26`, and
   # `node --experimental-strip-types` — which the CLI integration test spawns — only
   # exists from 22.6). What that job can honestly prove is the thing a consumer on Node 20

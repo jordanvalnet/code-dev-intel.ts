@@ -4,6 +4,10 @@ All notable changes to this package are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **`engines.node` is now `>=20.0.0` (was `>=18.0.0`).** Node 18 is end-of-life and nothing tested it. Node 20 is the floor CI proves for the compiled package: the `runtime-compat` job builds `dist/` and self-tests it there, and the full suite runs on Node 22 and 24. Developing on this repository still needs Node 22.12 or later.
+
 ## 0.5.1 - 2026-11-22
 
 Security release: every dependency on its latest release, `pnpm audit` clean at every severity (details under Security). No change to the tools or their output.

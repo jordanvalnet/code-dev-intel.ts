@@ -5,7 +5,12 @@
 - Follow `docs/ai/04-executable-task-backlog.md` in order.
 - Respect shared memory protocol in `docs/ai/03-shared-memory-protocol.md`.
 - Every task event must append to `docs/ai/memory/AGENT_MEMORY.md`.
+- Every pull request description cites the task ID, the memory entry's UTC timestamp and `docs/ai/memory/AGENT_MEMORY.md`; the `pr-memory-reference` workflow checks all three.
 - Use `pnpm` only. `npm` and `yarn` are not allowed in this repository.
+
+## Public repository
+
+This repository is public, and so is everything posted to it. Code, docs, the shared memory, the changelog, commit messages and pull request descriptions never contain personal data, details of a developer's machine (local paths, directory names, hostnames, local configuration) or references to private repositories, projects or tickets. The full rule is in `docs/ai/03-shared-memory-protocol.md`.
 
 ## Branching
 
