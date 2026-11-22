@@ -564,10 +564,12 @@ pnpm build
 pnpm test:all
 pnpm mcp:self-test
 pnpm release:smoke
-pnpm audit --audit-level=high
+pnpm audit --audit-level=moderate
 ```
 
 `release:smoke` is the most useful final check for the npm package because it validates the published package shape from a temporary consumer project.
+
+From 0.6.0 on, releases are published by CI only (`.github/workflows/publish.yml`), with npm trusted publishing and a provenance attestation, after a maintainer approves the run. A consumer can check what it installed with `pnpm audit signatures` or `npm audit signatures`. The procedure, and `pnpm security:patch` for dependency advisories, are in `docs/releasing.md`.
 
 ## Contributor Docs
 

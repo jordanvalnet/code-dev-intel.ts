@@ -17,6 +17,10 @@ This repository is public, and so is everything posted to it. Code, docs, the sh
 - Use short-lived branches: `task/T-00X-short-name`.
 - One task per branch and pull request.
 
+## Releases
+
+A release is a `release: vX.Y.Z — …` commit on `main` and a pushed `vX.Y.Z` tag. `.github/workflows/publish.yml` publishes it once a maintainer approves the run, and nobody runs `pnpm publish` by hand. The procedure, and `pnpm security:patch` for dependency advisories, are in `docs/releasing.md`.
+
 ## Definition of done
 
 1. Acceptance criteria from backlog met.

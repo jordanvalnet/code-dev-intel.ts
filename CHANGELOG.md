@@ -12,6 +12,16 @@ All notable changes to this package are documented in this file.
 
 - **The Node 20 `runtime-compat` job is gone.** The floor entry (ubuntu, Node 22) runs the full suite and, on top of it, builds `dist/` and self-tests the compiled server, so the oldest supported Node is still proven on what a consumer installs. The standalone pnpm that job needed is gone with it: the quality matrix is ubuntu Node 22 and 24, Windows and macOS Node 24.
 
+### Security
+
+- **Releases are published by CI, with npm trusted publishing and a provenance attestation.** `.github/workflows/publish.yml` runs when a `vX.Y.Z` tag is pushed. A job without credentials checks the tag against `package.json`, `main` and this changelog, and verifies the registry signatures of the installed dependencies. It also audits the runtime dependencies, runs the quality gates, then packs and smoke-tests the tarball. A second job waits for a maintainer's approval, then publishes that same tarball (checked by SHA-256) through OIDC. No npm token exists any more, and `npm audit signatures` in a consumer project now verifies where the package was built. Procedure: `docs/releasing.md`.
+- **`pnpm security:patch`** fixes what `pnpm audit` reports when no judgement call is needed:
+  - it re-resolves the lockfile within the declared ranges and raises the range of each affected direct dependency, so a consumer can no longer resolve the vulnerable version;
+  - it adds overrides only for transitive development dependencies;
+  - it runs the gates, then records the change. A change a consumer installs becomes a patch release when nothing else is waiting under `[Unreleased]`.
+
+  Its JSON report holds no local paths and says when a person is needed.
+
 ## 0.5.1 - 2026-11-22
 
 Security release: every dependency on its latest release, `pnpm audit` clean at every severity (details under Security). No change to the tools or their output.
