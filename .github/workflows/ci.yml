@@ -17,35 +17,26 @@ jobs:
   # atomic rename and line endings. Running one runner could never have caught a mistake
   # in any of that, so the gate runs on all three.
   #
-  # `suite: runtime-compat` is the Node 20 entry, the floor `engines.node` declares. The
-  # dev toolchain cannot run there (vitest 5 requires `^22.12 || ^24 || >=26`, and
-  # `node --experimental-strip-types` — which the CLI integration test spawns — only
-  # exists from 22.6). What that job can honestly prove is the thing a consumer on Node 20
-  # actually runs: the COMPILED package. So it lints, type-checks, builds and self-tests
-  # `dist/`, and leaves the vitest suite to the runtimes that support it.
+  # Node 22 is the floor `engines.node` declares (`>=22.12.0`), so its entry also builds
+  # `dist/` and self-tests the COMPILED server: what a consumer on the oldest supported
+  # Node actually runs, on top of the full suite against the sources.
   quality:
-    name: quality (${{ matrix.os }}, node ${{ matrix.node }}, ${{ matrix.suite }})
+    name: quality (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            node: 20
-            suite: runtime-compat
-          - os: ubuntu-latest
             node: 22
-            suite: full
+            compiled: true
           - os: ubuntu-latest
             node: 24
-            suite: full
             coverage: true
           - os: windows-latest
             node: 24
-            suite: full
           - os: macos-latest
             node: 24
-            suite: full
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -53,13 +44,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The pnpm version comes from `packageManager` in package.json. pnpm 11+ no longer
-      # runs on Node 20, so the Node 20 entry uses the standalone pnpm, which carries its
-      # own runtime: pnpm installs, and the matrix Node runs every script it launches.
+      # The pnpm version comes from `packageManager` in package.json.
       - name: Setup pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          standalone: ${{ matrix.node == 20 }}
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -77,22 +64,21 @@ jobs:
         run: pnpm type-check
 
       - name: Run tests
-        if: matrix.suite == 'full'
         run: pnpm test
 
       - name: Build the publishable output
-        if: matrix.suite == 'runtime-compat'
+        if: matrix.compiled
         run: pnpm build
 
       # Runs the compiled server the way an installed copy runs it — no type stripping,
-      # no vitest — so the oldest Node this repository can exercise still proves that the
-      # published artifact boots, resolves its native binaries and answers a tool call.
+      # no vitest — so the oldest supported Node proves that the published artifact boots,
+      # resolves its native binaries and answers a tool call.
       - name: Self-test the compiled server
-        if: matrix.suite == 'runtime-compat'
+        if: matrix.compiled
         run: node ./dist/code-intel-mcp/src/server.js --self-test
 
-      # Coverage once only: three OS times three Node versions would upload the same
-      # numbers five times over.
+      # Coverage once only: every matrix entry would otherwise upload the same numbers
+      # four times over.
       - name: Run coverage
         if: matrix.coverage
         run: pnpm vitest run --coverage --coverage.reporter=text --coverage.reporter=json-summary

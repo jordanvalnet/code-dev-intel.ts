@@ -159,7 +159,7 @@ Owner: docs-agent
 - Add an `AGENTS.md` for AI coding agents: what the package is, the public-repository rule, the CONTRIBUTING workflow (backlog order, shared memory, pull request references, `pnpm` only, task branches, definition of done) and the real commands.
 - Write the public-repository rule into `CONTRIBUTING.md`, `docs/ai/03-shared-memory-protocol.md` and the PR template: no personal data, machine details or references to private projects in the code, docs, shared memory, changelog, commits or pull requests. Redact the machine details already in the memory file, the one edit to a past entry the protocol allows.
 - State the three pull request references where agents read them: the task ID, the memory entry's UTC timestamp and the memory file, which `pr-memory-reference` checks.
-- Move `engines.node` to `>=20.0.0`, the floor CI proves for the compiled package (see T-021 Next), and split the README requirement into running the package (Node 20+) and developing on it (Node 22.12+).
+- Move `engines.node` to `>=22.12.0` (see T-021 Next): Node 18 and 20 are end-of-life, and 22.12 is what the toolchain already needs. Drop the Node 20 `runtime-compat` job and have the Node 22 floor entry build and self-test the compiled package on top of the full suite.
 Status: done (2026-11-22)
 
 ### T-023 Dependency and supply-chain refresh

@@ -68,8 +68,7 @@ pnpm add -D code-dev-intel.ts
 
 Requirements:
 
-- Node.js 20 or later to run the compiled package (CI boots and self-tests it on Node 20, and runs the full suite on 22 and 24)
-- Node.js 22.12 or later to develop on this repository (vitest 5, `node --experimental-strip-types`)
+- Node.js 22.12 or later, to run the package and to develop on it (CI runs the full suite on Node 22 and 24, and builds and self-tests the compiled package on 22)
 - pnpm `>=10`
 - A TypeScript or JavaScript repository where semantic navigation is useful
 

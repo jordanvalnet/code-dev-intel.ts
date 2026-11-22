@@ -31,7 +31,7 @@ One short-lived branch per task (`task/T-0NN-short-name`) and one pull request p
 
 ## Commands
 
-Developing on this repository needs Node 22.12 or later (vitest 5, `node --experimental-strip-types`). The compiled package needs Node 20 or later.
+Node 22.12 or later, both to develop on this repository (vitest 5, `node --experimental-strip-types`) and to run the compiled package.
 
 | Command | What it does |
 | --- | --- |

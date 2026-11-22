@@ -6,7 +6,11 @@ All notable changes to this package are documented in this file.
 
 ### Changed
 
-- **`engines.node` is now `>=20.0.0` (was `>=18.0.0`).** Node 18 is end-of-life and nothing tested it. Node 20 is the floor CI proves for the compiled package: the `runtime-compat` job builds `dist/` and self-tests it there, and the full suite runs on Node 22 and 24. Developing on this repository still needs Node 22.12 or later.
+- **Breaking: `engines.node` is now `>=22.12.0` (was `>=18.0.0`).** Node 18 and Node 20 are end-of-life (Node 20 since 2026-04-30), and Node 18 was never tested. Node 22.12 is also what the toolchain already needed: vitest 5 and pnpm 11+ do not run below it, and `@ast-grep/cli` 0.51 requires Node 20. One floor now covers running the package and developing on it.
+
+### CI
+
+- **The Node 20 `runtime-compat` job is gone.** The floor entry (ubuntu, Node 22) runs the full suite and, on top of it, builds `dist/` and self-tests the compiled server, so the oldest supported Node is still proven on what a consumer installs. The standalone pnpm that job needed is gone with it: the quality matrix is ubuntu Node 22 and 24, Windows and macOS Node 24.
 
 ## 0.5.1 - 2026-11-22
 
