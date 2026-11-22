@@ -4,6 +4,10 @@ All notable changes to this package are documented in this file.
 
 ## [Unreleased]
 
+## 0.5.1 - 2026-11-22
+
+Security release: every dependency on its latest release, `pnpm audit` clean at every severity (details under Security). No change to the tools or their output.
+
 ### Fixed
 
 - **`collectWorkspaceFiles` measured its exclude patterns from the caller's spelling of the workspace root while walking from the canonical one.** Wherever those two differ the relative path starts with `../`, and picomatch does not let `*` or `**` match a dot-leading segment, so every exclude pattern stops matching at once and `node_modules`, `dist`, `coverage`, `.next` and the caller's `.gitignore` entries are all walked and returned. Both shipped callers (`searchText`'s node engine and `findDuplicates`) canonicalize the root before calling, so **no tool was affected** - the function was simply relying on a precondition it never stated, and the first direct caller to pass a raw path fell into it. The spellings differ on macOS (`/var/folders/...` for a real `/private/var/folders/...`), on Windows (a short 8.3 form for a temp directory) and on any platform for a workspace reached through a symlink; the new macOS and Windows CI jobs are what surfaced it. The root is now canonicalized inside the function, and a regression test reaches the fixture through a symlink and is red without the fix.
