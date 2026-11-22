@@ -10,10 +10,22 @@ Primary memory file:
 ## Rules
 
 1. Append-only updates.
-2. Never delete prior entries.
+2. Never delete prior entries. The one permitted edit to a past entry is a redaction under "Public repository" below, and the entry that makes it says what was redacted and why.
 3. One entry per completed or blocked task event.
-4. UTC timestamp required.
+4. UTC timestamp required: the real time the entry is written, never a rounded or invented one.
 5. Include touched files and next action.
+6. Nothing the "Public repository" section forbids.
+
+## Public repository
+
+This repository is public. `AGENT_MEMORY.md`, `CHANGELOG.md`, commit messages and pull request descriptions are published with it and must stand on their own. They never contain:
+
+- personal data: people's names, e-mail addresses, usernames or account identifiers;
+- details of a developer's machine: absolute local paths, home or clone directory names, hostnames, hardware, local configuration (git, shell, editor, security software), other checkouts on the same machine;
+- references to private repositories, organisations, projects, tickets or URLs, including the projects that use this package;
+- secrets, tokens, keys, or values from a local `.env`.
+
+Evidence records the command, the operating system, the Node version and the result, never whose machine ran it or how that machine is set up.
 
 ## Entry format (strict)
 
