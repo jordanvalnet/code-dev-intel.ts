@@ -223,9 +223,12 @@ jobs:
             --certificate-identity "$OPENGREP_SIGNER" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$dir/opengrep_linux_x86"
-          chmod +x "$dir/opengrep_linux_x86"
-          "$dir/opengrep_linux_x86" --version
-          echo "OPENGREP_BIN=$dir/opengrep_linux_x86" >> "$GITHUB_ENV"
+          # Renamed only once verified: `safe-spawn` allows the command by its basename,
+          # which must be `opengrep`.
+          mv "$dir/opengrep_linux_x86" "$dir/opengrep"
+          chmod +x "$dir/opengrep"
+          "$dir/opengrep" --version
+          echo "OPENGREP_BIN=$dir/opengrep" >> "$GITHUB_ENV"
 
       - name: Run security scan
         run: pnpm ci:security
