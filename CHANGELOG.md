@@ -30,6 +30,16 @@ All notable changes to this package are documented in this file.
 
 - `perf-budget.yml`, `security.yml`, `pr-memory-reference.yml` and the `indexer-smoke` / `security` jobs of `ci.yml` stay on ubuntu: their thresholds and their tooling are calibrated for one runner.
 
+### Security
+
+- **Every dependency is on its latest release, and `pnpm audit` reports nothing at any severity** (5 high, 8 moderate and 1 low before). Runtime: `zod` 4.6.7 (a memory-exhaustion advisory affects 4.5.4) and `@ast-grep/cli` with its per-platform binaries 0.51.3 (from 0.45.3). Development: `vite` 8.3.8, `vitest` and `@vitest/coverage-v8` 5.1.1, `eslint` 10.15.0, `typescript-eslint` 8.73.0, `globals` 17.14.0, `@types/node` 26.6.6. **TypeScript stays on 6.0.3**, the last 6.x: TypeScript 7 no longer exposes the compiler API this package calls at runtime (its entry point exports the version only, and the API has moved to `typescript/unstable/*`), and `typescript-eslint` supports `<6.1.0`. Moving to 7 is a port, not a version bump.
+- **The ten `pnpm.overrides` were dead.** pnpm no longer reads the `pnpm` field of `package.json` (a warning in 10.34, ignored from 11), so the version floors they set were held only by a lockfile nobody regenerated. After the refresh none of them is needed, so they are removed rather than moved.
+- **pnpm 12.21.0** (from 10.34.5), with its settings in a new `pnpm-workspace.yaml`. Its supply-chain defaults now apply here: newly published versions are not resolved for 24 hours, git and tarball sub-dependencies are refused, and a dependency build script that is not declared fails the install. The two that exist, `@ast-grep/cli` and `esbuild`, are declined in `allowBuilds`. A consumer on pnpm 11+ hits the same `@ast-grep/cli` check, and the README now says how to answer it.
+- **CI supply chain.** Every action is pinned to a commit SHA, with its version in a comment. OpenGrep is no longer installed by piping the upstream `main` install script into bash: CI downloads the pinned v2.0.0 release and verifies its sigstore signature with cosign, against the exact signing workflow, before running it. Every workflow declares `permissions: contents: read`. The pnpm version comes from `packageManager` instead of being repeated in each workflow, and the Node 20 job uses the standalone pnpm, since pnpm 11+ no longer runs on Node 20.
+- **The dependency audit also runs weekly** (`security-hardening`, Mondays 05:00 UTC) and fails from `moderate` instead of `high`. The advisories fixed here went unnoticed because the audit only ran when a pull request was opened.
+- **Docker.** `node:24.22.3-alpine` and `alpine:3.24`. The zoekt images, last published on Docker Hub on 2025-05-06, are pinned to that release by tag and digest instead of `latest`. The MCP image copies `pnpm-workspace.yaml` (pnpm 12 refuses the install without it), installs production dependencies only and runs as the `node` user. `.dockerignore` now keeps logs, local caches, pack output, `.env` files and `.npmrc` out of the build context.
+- `scripts/release-smoke.mjs` gives its throwaway project the `pnpm-workspace.yaml` a pnpm 11+ consumer needs. That file also makes the project its own workspace root, which replaces `--ignore-workspace`.
+
 ## 0.5.0 - 2026-09-04
 
 ### Added

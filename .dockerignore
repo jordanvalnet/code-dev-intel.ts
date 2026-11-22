@@ -1,7 +1,18 @@
 node_modules
 .git
+.github
 .vscode
+.claude
 dist
 coverage
+pack-output
+tmp
+.code-intel-cache
+.local-hooks
 tmp-dev-intel.sqlite
+*.log
 **/*.md
+# Credentials must never reach an image layer.
+.env
+.env.*
+.npmrc
