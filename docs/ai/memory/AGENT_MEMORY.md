@@ -338,3 +338,16 @@ LOCK: none
 - Risks: none known.
 - Next: Merge after T-026 (this branch is stacked on it).
 - Blockers: none
+
+## [2026-11-23T13:07:27Z] ClaudeOpus | T-024
+- Status: done
+- Summary: The 0.6.0 release proved `publish.yml` end to end, the acceptance criterion left open by the previous T-024 entry. `release: v0.6.0` (aca4d1b) went onto `main`, and CI passed there on all 9 jobs. The annotated tag `v0.6.0` was pushed. `verify` passed. `publish` waited in the `npm` environment until the maintainer approved it, matched the tarball's SHA-256, exchanged the OIDC token, signed the provenance and published under `latest`, with no npm token anywhere. `main` and the `v*` tags are now protected by rulesets, recorded under One-time setup in `docs/releasing.md`, together with the `E403` that `npm trust` returns for a CLI logged in with a token that bypasses two-factor authentication.
+- Decisions: (1) 0.5.1 was skipped. It was tagged but never published, and publishing it would have meant a workstation publish. Its fixes ship in 0.6.0, and the 0.6.0 changelog says so. (2) Rulesets:
+  - `main` requires a pull request (no approval, rebase or squash) with every `ci` job and `check-memory-reference` passing, from the GitHub Actions app only, and forbids deletion and force pushes. The admin role bypasses it for the `release:` commit.
+  - `v*` tags cannot be updated or deleted, with no bypass, so a pushed release tag never moves.
+  - Creating `v*` tags is limited to the admin role and to automation added to that ruleset's bypass list.
+- Files: docs/releasing.md, docs/ai/memory/AGENT_MEMORY.md
+- Evidence: `ci` on aca4d1b: 9 / 9 jobs passed. Run 45084763819 of `publish`: `verify` passed (tag, `main`, changelog, registry, `pnpm audit signatures`, `pnpm audit --prod --audit-level=moderate`, `pnpm ci:quality`, pack, release smoke); after approval `publish` printed `code-dev-intel.ts-0.6.0.tgz: OK`, `Signed provenance statement with source and build information` and `Published package code-dev-intel.ts@0.6.0`. Registry: `latest` is 0.6.0, `engines.node` `>=22.12.0`, 2 registry signatures, `_npmUser.trustedPublisher.id` `github`, and a SLSA provenance v1 attestation for `pkg:npm/code-dev-intel.ts@0.6.0` naming `refs/tags/v0.6.0`, `.github/workflows/publish.yml`, commit aca4d1b and the GitHub-hosted runner. As a consumer, in an empty project on Windows, Node 24: `pnpm add code-dev-intel.ts@0.6.0 --ignore-scripts` installed it, and `pnpm audit signatures` reported 28 packages with verified registry signatures.
+- Risks: The attestation was decoded and read, not verified cryptographically on the consumer side: `pnpm audit signatures` checks registry signatures only. The publish tokens still exist until the maintainer disallows tokens.
+- Next: The maintainer sets "Require two-factor authentication and disallow tokens" and revokes the publish tokens that are left. The next release follows `docs/releasing.md`.
+- Blockers: none
