@@ -36,8 +36,12 @@ These are maintainer settings, outside the repository.
   npm trust github code-dev-intel.ts --repo jordanvalnet/code-dev-intel.ts --file publish.yml --env npm --allow-publish
   ```
 
-  A new trusted publisher that has not published within two days expires. Once a release has gone through, set "Publishing access" to "Require two-factor authentication and disallow tokens", then revoke the publish tokens that are left.
+  The command answers `E403` ("Granular access tokens that bypass two-factor authentication may not perform this action") when the npm CLI is logged in with such a token: use the package settings page, or `npm login` first. A new trusted publisher that has not published within two days expires. Once a release has gone through, set "Publishing access" to "Require two-factor authentication and disallow tokens", then revoke the publish tokens that are left.
 - **GitHub**, environment `npm`: the maintainer is a required reviewer, the deployment policy allows tags matching `v*` only, and self-review is allowed, because the maintainer who pushes a tag is also the one who approves it.
+- **GitHub**, rulesets:
+  - `main` takes changes through a pull request only (no approval required, rebase or squash), with the `ci` and `pr-memory-reference` checks passing, and cannot be deleted or force-pushed. The repository admin role bypasses it, which is how the `release:` commit lands on `main`.
+  - Tags matching `v*` cannot be moved or deleted, by anyone.
+  - Only the admin role can create `v*` tags, plus any automation added to that ruleset's bypass list to push release tags.
 
 ## `pnpm security:patch`
 
